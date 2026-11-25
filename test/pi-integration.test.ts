@@ -305,6 +305,59 @@ test("one session serves every call and turn, and a transport failure replaces i
 	}
 });
 
+test("reset ends the native turn before discarding runtime cleanup state", async () => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "direct-session-reset-test."));
+	const log: string[] = [];
+	const executor = new DirectSessionExecutor({ createSession: async () => fakeSession(log, 1) });
+	try {
+		await executor.execute("js", { code: "let app = await cua.getApp('TextEdit')" }, { stateRoot: root });
+		await executor.execute("js_reset", {}, { stateRoot: root });
+		assert.deepEqual(log, ["1:js", "1:endTurn", "1:js_reset"]);
+	} finally {
+		await executor.close();
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("stale sessions are replaced when on-disk binaries change or native pipe startup fails", async () => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "direct-session-stale-test."));
+	const log: string[] = [];
+	let sessionsCreated = 0;
+	let session1Current = true;
+	let returnPipeFailure = false;
+	const executor = new DirectSessionExecutor({
+		createSession: async () => {
+			const id = ++sessionsCreated;
+			const session = fakeSession(log, id);
+			return {
+				...session,
+				isCurrent: () => (id === 1 ? session1Current : true),
+				async call(tool: CuaReplTool) {
+					log.push(`${id}:${tool}`);
+					if (returnPipeFailure) {
+						returnPipeFailure = false;
+						return brokerResult('{"apps":[],"errors":["Native apps: Error: Sky Computer Use native pipe startup failed"]}');
+					}
+					return brokerResult("ok");
+				},
+			};
+		},
+	});
+	try {
+		await executor.execute("js", { code: "1" }, { stateRoot: root });
+		session1Current = false;
+		await executor.execute("js", { code: "2" }, { stateRoot: root });
+		returnPipeFailure = true;
+		await executor.execute("js", { code: "3" }, { stateRoot: root });
+		await executor.execute("js", { code: "4" }, { stateRoot: root });
+		await executor.close();
+		assert.deepEqual(log, ["1:js", "1:close", "2:js", "2:js", "2:close", "3:js", "3:close"]);
+	} finally {
+		await executor.close();
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("a quiet MCP session ends its turn but keeps its REPL", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "pi-direct-idle-test."));
 	const log: string[] = [];

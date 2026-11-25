@@ -30,6 +30,7 @@ export interface CuaReplToolDefinition {
 	inputSchema: {
 		type: "object";
 		properties: Partial<JsProperties>;
+		required?: string[];
 		additionalProperties: false;
 	};
 	annotations: { readOnlyHint: boolean; destructiveHint: boolean; openWorldHint: boolean };
@@ -71,13 +72,19 @@ export function cuaReplToolDefinitions(env: Record<string, string>): CuaReplTool
 		title: { description: title, maxLength: 80, minLength: 1, type: "string" },
 	};
 	if (completion) properties.completion_summary = { description: completion.description, maxLength: 80, minLength: 1, type: "string" };
+	const jsInputSchema: CuaReplToolDefinition["inputSchema"] = {
+		type: "object",
+		properties,
+		additionalProperties: false,
+	};
+	if (!completion) jsInputSchema.required = ["code"];
 	return {
 		instructions: overrides.server_instructions,
 		tools: [
 			{
 				name: "js",
 				description: completion ? `${overrides.tools.js.description}\n\n${completion.instructions}` : overrides.tools.js.description,
-				inputSchema: { type: "object", properties, additionalProperties: false },
+				inputSchema: jsInputSchema,
 				annotations: ANNOTATIONS,
 			},
 			{

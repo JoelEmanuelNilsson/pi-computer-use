@@ -1,6 +1,7 @@
 import {
 	createOfficialCuaReplSession,
 	pathConfigFile,
+	STUCK_SERVICE_ERROR,
 	type OfficialCuaReplSession,
 } from "./direct-broker.ts";
 import {
@@ -61,6 +62,10 @@ export class DirectSessionExecutor {
 				const response = await executeDirectTool({ tool, arguments: params }, {
 					...dependencies,
 					callTool: async (directTool, args, options) => {
+						if (this.session?.isCurrent && !this.session.isCurrent()) {
+							await this.closeSession().catch(() => undefined);
+						}
+						if (directTool === "js_reset") await this.session?.endTurn();
 						this.session ??= await (this.dependencies.createSession ?? createOfficialCuaReplSession)({
 							supportsOpenAiFormElicitation: dependencies.supportsOpenAiFormElicitation === true,
 							configPath: pathConfigFile(dependencies.stateRoot ?? defaultStateRoot()),
@@ -68,7 +73,12 @@ export class DirectSessionExecutor {
 						return this.session.call(directTool, args, options);
 					},
 				});
-				if (this.dependencies.idleTurnEndMs) {
+				const nativePipeFailed = response.content.some(
+					(block) => block.type === "text" && String(block.text ?? "").includes(STUCK_SERVICE_ERROR),
+				);
+				if (nativePipeFailed) {
+					await this.closeSession().catch(() => undefined);
+				} else if (this.dependencies.idleTurnEndMs) {
 					const timer = setTimeout(() => {
 						void this.runExclusive(async () => {
 							if (this.idleTimer === timer) await this.session?.endTurn();

@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
 import { ensureChromeNativeHostManifest } from "./chrome-native-host-manifest.ts";
+import { unexpectedLsofStderr } from "./lsof-stderr.ts";
 import type { CuaReplArguments, CuaReplTool, JsonObject, JsonValue } from "./tools.ts";
 import { PACKAGE_VERSION } from "./version.ts";
 
@@ -17,6 +18,7 @@ const CODEX_RELATIVE_PATHS = [
 ];
 const COMPUTER_USE_APP_RELATIVE_PATH = "computer-use/Codex Computer Use.app";
 const SERVICE_RELATIVE_PATH = "Contents/MacOS/SkyComputerUseService";
+const NATIVE_CLIENT_RELATIVE_PATH = "Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient";
 const CUA_REPL_CACHE_RELATIVE_PATH = ".codex/plugins/cache/openai-bundled/unified-computer-use";
 const CUA_REPL_SERVER = "cua_repl";
 const CHATGPT_APP_BUNDLE_ID = "com.openai.codex";
@@ -29,8 +31,7 @@ function outOfStepHint(codexVersion?: string): string {
 	return `ChatGPT and codex-computer-use-mcp may be out of step (${versions}). Open ChatGPT so it can install updates (\`open -a ChatGPT\`), update codex-computer-use-mcp to its latest release, restart Pi or the MCP client, then retry. If it still fails, tell the user.`;
 }
 
-// What official node_repl reports when the shared Computer Use service does not answer.
-const STUCK_SERVICE_ERROR = "Sky Computer Use native pipe startup failed";
+export const STUCK_SERVICE_ERROR = "Sky Computer Use native pipe startup failed";
 const STUCK_SERVICE_HINT = "The Computer Use service may be stuck. Restart it with `pkill -f MacOS/SkyComputerUseService` (it relaunches on the next call, with or without ChatGPT running), then retry once. If it fails again, ask the user to relaunch ChatGPT.";
 
 const jsonObjectSchema = z.record(z.string(), z.json());
@@ -91,6 +92,12 @@ export interface DirectBrokerOptions {
 	skipSignatureVerification?: boolean;
 	/** Test-only process-enumerator override. */
 	processEnumeratorCommand?: string;
+	/** Test-only cwd process-enumerator override. */
+	cwdProcessEnumeratorCommand?: string;
+	/** Test-only native client override for turn-ended cleanup. */
+	nativeClientPath?: string;
+	/** Test-only Computer Use app override for turn-ended cleanup. */
+	computerUseAppPath?: string;
 	onSpawn?: (pid: number) => void;
 	/** Path configuration file; see `readOfficialPathConfig`. */
 	configPath?: string;
@@ -356,6 +363,62 @@ export function resolveOfficialCuaRepl(codexPath: string, options: ResolveOffici
 	return { configPath, server, nodeReplPath, computerUseAppPath, clientBuild };
 }
 
+export interface OfficialRuntimeSnapshot {
+	configPath?: string;
+	codexPath: string;
+	codexDev: number;
+	codexIno: number;
+	nodeReplPath: string;
+	nodeReplDev: number;
+	nodeReplIno: number;
+	cuaReplConfigPath: string;
+	computerUseAppPath: string;
+	clientBuild: string;
+}
+
+export function captureOfficialRuntimeSnapshot(
+	codexPath: string,
+	cuaRepl: Pick<OfficialCuaRepl, "configPath" | "nodeReplPath" | "computerUseAppPath" | "clientBuild">,
+	configPath?: string,
+): OfficialRuntimeSnapshot {
+	const codexStat = statSync(codexPath);
+	const nodeReplStat = statSync(cuaRepl.nodeReplPath);
+	return {
+		configPath,
+		codexPath,
+		codexDev: codexStat.dev,
+		codexIno: codexStat.ino,
+		nodeReplPath: cuaRepl.nodeReplPath,
+		nodeReplDev: nodeReplStat.dev,
+		nodeReplIno: nodeReplStat.ino,
+		cuaReplConfigPath: cuaRepl.configPath,
+		computerUseAppPath: cuaRepl.computerUseAppPath,
+		clientBuild: cuaRepl.clientBuild,
+	};
+}
+
+export function isOfficialRuntimeCurrent(
+	snapshot: OfficialRuntimeSnapshot,
+	options: ResolveOfficialOptions = {},
+): boolean {
+	try {
+		const resolveOptions = { ...options, configPath: options.configPath ?? snapshot.configPath };
+		const runSync = resolveOptions.runSync ?? productionRunSync;
+		const currentCodexPath = locateOfficialCodex(resolveOptions);
+		if (currentCodexPath !== snapshot.codexPath) return false;
+		const codexStat = statSync(currentCodexPath);
+		if (codexStat.dev !== snapshot.codexDev || codexStat.ino !== snapshot.codexIno) return false;
+		const currentConfigPath = readCuaReplServer(currentCodexPath, resolveOptions).configPath;
+		if (currentConfigPath !== snapshot.cuaReplConfigPath) return false;
+		const nodeReplStat = statSync(snapshot.nodeReplPath);
+		if (nodeReplStat.dev !== snapshot.nodeReplDev || nodeReplStat.ino !== snapshot.nodeReplIno) return false;
+		const currentBuild = plistValue(snapshot.computerUseAppPath, "CFBundleVersion", runSync);
+		return currentBuild === snapshot.clientBuild;
+	} catch {
+		return false;
+	}
+}
+
 export function verifyOfficialDirectBroker(options: ResolveOfficialOptions = {}) {
 	const runSync = options.runSync ?? productionRunSync;
 	const codexPath = resolveOfficialCodex({ ...options, runSync });
@@ -432,15 +495,15 @@ function collectDescendants(rootPid: number, processEnumeratorCommand = "/usr/bi
 	return descendants;
 }
 
-function collectProcessesWithCwd(workDir: string): Set<number> {
-	const result = spawnSync("/usr/sbin/lsof", ["-a", "-d", "cwd", "+d", workDir, "-Fp"], {
+function collectProcessesWithCwd(workDir: string, command = "/usr/sbin/lsof"): Set<number> {
+	const result = spawnSync(command, ["-a", "-d", "cwd", "+d", workDir, "-Fp"], {
 		encoding: "utf8",
 		timeout: 3000,
 	});
 	if (
 		result.error
 		|| (result.status !== 0 && result.status !== 1)
-		|| (result.status === 1 && (result.stderr ?? "").trim().length > 0)
+		|| (result.status === 1 && unexpectedLsofStderr(result.stderr ?? "", workDir, statSync(workDir).dev).length > 0)
 	) {
 		throw new ProcessEnumerationError("Could not enumerate processes owned by the private broker working directory", new Set(), result.error);
 	}
@@ -458,6 +521,7 @@ async function terminateGroup(
 	proc: ChildProcessWithoutNullStreams | undefined,
 	workDir: string,
 	processEnumeratorCommand = "/usr/bin/pgrep",
+	cwdProcessEnumeratorCommand = "/usr/sbin/lsof",
 ): Promise<void> {
 	const pid = proc?.pid;
 	if (!pid) return;
@@ -475,7 +539,7 @@ async function terminateGroup(
 			cleanupError ??= error instanceof Error ? error : new Error(String(error));
 		}
 		try {
-			for (const owned of collectProcessesWithCwd(workDir)) found.add(owned);
+			for (const owned of collectProcessesWithCwd(workDir, cwdProcessEnumeratorCommand)) found.add(owned);
 		} catch (error) {
 			if (error instanceof ProcessEnumerationError) {
 				for (const owned of error.partialPids) found.add(owned);
@@ -530,7 +594,7 @@ async function terminateGroup(
 		await new Promise((resolve) => setTimeout(resolve, 25));
 	}
 	let cwdSurvivors = new Set<number>();
-	try { cwdSurvivors = collectProcessesWithCwd(workDir); }
+	try { cwdSurvivors = collectProcessesWithCwd(workDir, cwdProcessEnumeratorCommand); }
 	catch (error) { cleanupError ??= error instanceof Error ? error : new Error(String(error)); }
 	for (const survivor of cwdSurvivors) {
 		try { process.kill(survivor, "SIGKILL"); } catch { /* exited */ }
@@ -563,6 +627,8 @@ export interface OfficialCuaReplSession {
 	): Promise<DirectBrokerResult>;
 	/** Tell the official runtime this agent turn ended, as ChatGPT's Stop hook does. REPL bindings survive. */
 	endTurn(): Promise<void>;
+	/** Check whether the on-disk ChatGPT and Computer Use binaries still match this session. */
+	isCurrent?(): boolean;
 	close(): Promise<void>;
 }
 
@@ -588,14 +654,33 @@ export async function createOfficialCuaReplSession(
 	options: DirectBrokerOptions = {},
 ): Promise<OfficialCuaReplSession> {
 	const verification = options.skipSignatureVerification
-		? { brokerVersion: "test-app-server", clientBuild: "test-client", server: undefined, codexPath: undefined, cuaReplConfigPath: undefined }
+		? {
+			brokerVersion: "test-app-server",
+			clientBuild: "test-client",
+			server: undefined,
+			codexPath: undefined,
+			cuaReplConfigPath: undefined,
+			computerUseAppPath: options.computerUseAppPath,
+			nativeClientPath: options.nativeClientPath,
+			runtimeSnapshot: undefined,
+		}
 		: (() => {
 			const verified = verifyOfficialDirectBroker({ configPath: options.configPath });
 			ensureChromeNativeHostManifest({
 				cuaReplConfigPath: verified.cuaRepl.configPath,
 				verifyBinary: (binaryPath) => verifySignedBinary(binaryPath, productionRunSync),
 			});
-			return { ...verified, server: verified.cuaRepl.server, cuaReplConfigPath: verified.cuaRepl.configPath };
+			const candidateNativeClient = path.join(verified.cuaRepl.computerUseAppPath, NATIVE_CLIENT_RELATIVE_PATH);
+			const nativeClientPath = existsSync(candidateNativeClient) ? realpathSync(candidateNativeClient) : undefined;
+			if (nativeClientPath) verifySignedBinary(nativeClientPath, productionRunSync);
+			return {
+				...verified,
+				server: verified.cuaRepl.server,
+				cuaReplConfigPath: verified.cuaRepl.configPath,
+				computerUseAppPath: verified.cuaRepl.computerUseAppPath,
+				nativeClientPath,
+				runtimeSnapshot: captureOfficialRuntimeSnapshot(verified.codexPath, verified.cuaRepl, options.configPath),
+			};
 		})();
 	const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pi-direct-computer-use."));
 	const codexHome = path.join(tempRoot, "codex-home");
@@ -632,7 +717,7 @@ export async function createOfficialCuaReplSession(
 		pending.clear();
 	};
 	const ensureTerminated = (): Promise<void> => {
-		termination ??= terminateGroup(proc, workDir, options.processEnumeratorCommand);
+		termination ??= terminateGroup(proc, workDir, options.processEnumeratorCommand, options.cwdProcessEnumeratorCommand);
 		return termination;
 	};
 	const fail = (error: Error): void => {
@@ -692,14 +777,50 @@ export async function createOfficialCuaReplSession(
 			void response.done.then(() => { clearTimeout(timer); resolve(true); });
 		});
 	};
-	// Best effort: the turn's requests already ran, so their results stand. At worst the
-	// shared service keeps showing this session's cursor.
+	let turnCleanupHome: string | undefined;
+	const resolveTurnCleanupHome = async (appPath: string): Promise<string> => {
+		let componentHome = path.dirname(path.dirname(appPath));
+		if (path.join(componentHome, COMPUTER_USE_APP_RELATIVE_PATH) !== appPath) {
+			if (!turnCleanupHome) {
+				turnCleanupHome = path.join(tempRoot, "turn-cleanup-home");
+				await mkdir(path.join(turnCleanupHome, "computer-use"), { recursive: true, mode: 0o700 });
+				await symlink(appPath, path.join(turnCleanupHome, COMPUTER_USE_APP_RELATIVE_PATH));
+			}
+			componentHome = turnCleanupHome;
+		}
+		return componentHome;
+	};
 	const sendTurnEnded = async (kind: "turn-end" | "cleanup"): Promise<void> => {
 		if (!turnActive) return;
 		turnActive = false;
+		const endedTurnId = turnId;
 		try {
-			await toolCall("turn_ended", { hook_event_name: "Stop", session_id: threadId, turn_id: turnId }, 3_000, kind);
-		} catch { /* see above */ }
+			await toolCall("turn_ended", { hook_event_name: "Stop", session_id: threadId, turn_id: endedTurnId }, 3_000, kind);
+		} catch { /* best effort */ }
+		const nativeClientPath = verification.nativeClientPath;
+		if (nativeClientPath && threadId) {
+			const payload = JSON.stringify({
+				type: "agent-turn-complete",
+				"thread-id": threadId,
+				"turn-id": endedTurnId,
+				cwd: workDir,
+				"input-messages": [],
+				"last-assistant-message": "",
+			});
+			try {
+				const env: JsonObject = {};
+				if (verification.computerUseAppPath) {
+					env.CODEX_HOME = await resolveTurnCleanupHome(verification.computerUseAppPath);
+				}
+				await request("command/exec", {
+					command: [nativeClientPath, "turn-ended", payload],
+					cwd: workDir,
+					env,
+					sandboxPolicy: { type: "dangerFullAccess" },
+					timeoutMs: 3_000,
+				}, 5_000, kind);
+			} catch { /* best effort */ }
+		}
 		turnId = randomUUID();
 	};
 
@@ -904,6 +1025,9 @@ export async function createOfficialCuaReplSession(
 		async endTurn() {
 			if (closed || fatalError || callActive) return;
 			await sendTurnEnded("turn-end");
+		},
+		isCurrent() {
+			return verification.runtimeSnapshot ? isOfficialRuntimeCurrent(verification.runtimeSnapshot) : true;
 		},
 		close,
 	};

@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { z } from "zod";
-import { callOfficialCuaRepl, createOfficialCuaReplSession, DirectBrokerCallError } from "../src/direct-broker.ts";
+import {
+	callOfficialCuaRepl,
+	captureOfficialRuntimeSnapshot,
+	createOfficialCuaReplSession,
+	DirectBrokerCallError,
+	isOfficialRuntimeCurrent,
+} from "../src/direct-broker.ts";
 import packageMetadata from "../package.json" with { type: "json" };
 
 const packageVersion = packageMetadata.version;
@@ -28,6 +35,7 @@ rl.on("line",line=>{const m=JSON.parse(line); appendFileSync(log,JSON.stringify(
  if(m.method==="initialized") return;
  if(m.method==="thread/start"&&mode==="protocol-drift") return send({id:m.id,error:{code:-32600,message:"Invalid request: unknown variant \`thread/start\`, expected one of \`initialize\`, \`thread/begin\`, \`thread/resume\`"}});
  if(m.method==="thread/start"){send({id:m.id,result:{thread:{id:"thread-test"}}}); if(mode==="model-event")send({method:"turn/started",params:{}}); return;}
+ if(m.method==="command/exec") return send({id:m.id,result:{exitCode:0,stdout:"",stderr:""}});
  if(m.method==="mcpServer/tool/call"&&m.params.tool==="turn_ended"){
    if(mode==="cleanup-hang") return;
    if(mode==="cleanup-model") return send({method:"turn/started",params:{}});
@@ -152,6 +160,119 @@ test("one session keeps REPL bindings across turns, and each ended turn gets its
 		assert.deepEqual(ended, [turns[0], turns[2]]);
 		assert.equal(turns[0], turns[1]);
 		assert.notEqual(turns[1], turns[2]);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a stale Time Machine snapshot warning does not discard a completed tool result", async () => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "direct-broker-lsof-test."));
+	try {
+		const { script } = await makeFake(root);
+		const enumerator = path.resolve("test/fixtures/lsof-snapshot-warning.mjs");
+		await chmod(enumerator, 0o700);
+		const result = await callOfficialCuaRepl("js", { code: "1" }, {
+			...options(script), cwdProcessEnumeratorCommand: enumerator,
+		});
+		assert.equal(result.content[0].text, "direct-ok");
+		assert.equal(result.brokerCleanupVerified, true);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("Time Machine warnings on the working directory's device still fail cleanup", async () => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "direct-broker-lsof-device-test."));
+	const previous = process.env.LSOF_TEST_SAME_DEVICE;
+	process.env.LSOF_TEST_SAME_DEVICE = "1";
+	try {
+		const { script } = await makeFake(root);
+		const enumerator = path.resolve("test/fixtures/lsof-snapshot-warning.mjs");
+		await chmod(enumerator, 0o700);
+		await assert.rejects(callOfficialCuaRepl("js", { code: "1" }, {
+			...options(script), cwdProcessEnumeratorCommand: enumerator,
+		}), (error: Error) => error instanceof DirectBrokerCallError && !error.cleanupVerified && /cleanup failed/.test(error.message));
+	} finally {
+		if (previous === undefined) delete process.env.LSOF_TEST_SAME_DEVICE;
+		else process.env.LSOF_TEST_SAME_DEVICE = previous;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("sendTurnEnded dispatches SkyComputerUseClient turn-ended via command/exec with matching thread and turn IDs", async () => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "direct-broker-native-turn-end."));
+	try {
+		const { script, log } = await makeFake(root);
+		const appPath = path.join(root, ".codex", "computer-use", "Codex Computer Use.app");
+		const clientPath = path.join(appPath, "Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient");
+		await callOfficialCuaRepl("js", { code: "1" }, {
+			...options(script),
+			nativeClientPath: clientPath,
+			computerUseAppPath: appPath,
+		});
+		const records = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+		const call = records.find(isCall).params;
+		const turnId = call._meta["x-codex-turn-metadata"].turn_id;
+		const execRecord = records.find((item) => item.method === "command/exec");
+		assert.ok(execRecord);
+		assert.equal(execRecord.params.command[0], clientPath);
+		assert.equal(execRecord.params.command[1], "turn-ended");
+		const payload = JSON.parse(execRecord.params.command[2]);
+		assert.equal(payload.type, "agent-turn-complete");
+		assert.equal(payload["thread-id"], "thread-test");
+		assert.equal(payload["turn-id"], turnId);
+		assert.equal(execRecord.params.env.CODEX_HOME, path.join(root, ".codex"));
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("runtime snapshot detects ChatGPT version change, replaced binaries, and updated clientBuild", async () => {
+	const root = realpathSync(await mkdtemp(path.join(os.tmpdir(), "direct-broker-snapshot-test.")));
+	try {
+		const app = path.join(root, "Applications/ChatGPT.app");
+		const userHome = path.join(root, "user");
+		const codexPath = path.join(app, "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex");
+		const nodeReplPath = path.join(app, "Contents/Resources/cua_node/bin/node_repl");
+		const computerUseAppPath = path.join(userHome, ".codex/computer-use/Codex Computer Use.app");
+		const configV1 = path.join(userHome, ".codex/plugins/cache/openai-bundled/unified-computer-use/26.1120.1/.mcp.json");
+		const configV2 = path.join(userHome, ".codex/plugins/cache/openai-bundled/unified-computer-use/26.1130.2/.mcp.json");
+		await mkdir(path.dirname(codexPath), { recursive: true });
+		await mkdir(path.dirname(nodeReplPath), { recursive: true });
+		await mkdir(path.dirname(configV1), { recursive: true });
+		await mkdir(path.dirname(configV2), { recursive: true });
+		await writeFile(codexPath, "codex-v1", { mode: 0o700 });
+		await writeFile(nodeReplPath, "repl-v1", { mode: 0o700 });
+		const mcpPayload = JSON.stringify({ mcpServers: { cua_repl: { command: nodeReplPath, args: [], env: {} } } });
+		await writeFile(configV1, mcpPayload);
+		await writeFile(configV2, mcpPayload);
+
+		let appVersion = "26.1120.1";
+		let clientBuild = "1001900";
+		const runSync = (command: string, args: string[]) => {
+			if (command === "/usr/bin/mdfind") return { status: 0, stdout: "", stderr: "" };
+			if (command === "/usr/bin/plutil") {
+				if (args[1] === "CFBundleShortVersionString") return { status: 0, stdout: `${appVersion}\n`, stderr: "" };
+				if (args[1] === "CFBundleVersion") return { status: 0, stdout: `${clientBuild}\n`, stderr: "" };
+			}
+			return { status: 1, stdout: "", stderr: "" };
+		};
+		const resolveOpts = { userHome, chatGptAppPaths: [app], runSync };
+		const snapshot = captureOfficialRuntimeSnapshot(codexPath, {
+			configPath: configV1,
+			nodeReplPath,
+			computerUseAppPath,
+			clientBuild,
+		});
+		assert.equal(isOfficialRuntimeCurrent(snapshot, resolveOpts), true);
+
+		clientBuild = "1001901";
+		assert.equal(isOfficialRuntimeCurrent(snapshot, resolveOpts), false);
+		clientBuild = "1001900";
+		assert.equal(isOfficialRuntimeCurrent(snapshot, resolveOpts), true);
+
+		appVersion = "26.1130.2";
+		assert.equal(isOfficialRuntimeCurrent(snapshot, resolveOpts), false);
+		appVersion = "26.1120.1";
+		assert.equal(isOfficialRuntimeCurrent(snapshot, resolveOpts), true);
+
+		await rm(nodeReplPath);
+		await writeFile(nodeReplPath, "repl-v2", { mode: 0o700 });
+		assert.equal(isOfficialRuntimeCurrent(snapshot, resolveOpts), false);
 	} finally { await rm(root, { recursive: true, force: true }); }
 });
 
