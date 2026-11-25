@@ -161,7 +161,7 @@ function testSession(overrides: Partial<TestSession> = {}): TestSession {
 	};
 }
 
-test("Pi registers the official cua_repl tools as ordinary tools and ends the turn when the agent settles", async () => {
+test("Pi registers the official cua_repl tools as deferred tools and ends the turn when the agent settles", async () => {
 	const events: string[] = [];
 	const { tools, commands, handlers } = loadAdapter(testSession({
 		async endTurn() { events.push("endTurn"); },
@@ -173,7 +173,7 @@ test("Pi registers the official cua_repl tools as ordinary tools and ends the tu
 	assert.deepEqual(tools.map((tool) => tool.name), ["cua_repl", "cua_repl_reset"]);
 	for (const [index, definition] of route.official.tools.entries()) {
 		const tool = tools[index]!;
-		assert.equal(tool.exposure, undefined);
+		assert.equal(tool.exposure, "deferred");
 		assert.equal(tool.description, definition.description);
 		assert.deepEqual(tool.parameters, definition.inputSchema);
 		assert.deepEqual(tool.annotations, definition.annotations);

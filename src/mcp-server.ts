@@ -12,6 +12,7 @@ import {
 import { z } from "zod";
 import { computerUseStatus, selectComputerUseRoute, type DirectServiceDependencies } from "./direct-service.ts";
 import { forwardOfficialElicitationToMcpClient } from "./mcp-elicitation.ts";
+import { spillOversizedTextBlocks } from "./result-sanitizer.ts";
 import { LegacySessionExecutor } from "./legacy/session-executor.ts";
 import { COMPUTER_USE_METHODS, isDirectMethod, TOOL_INPUT_SCHEMAS, TOOL_METADATA } from "./legacy/tools.ts";
 import { DirectSessionExecutor } from "./session-executor.ts";
@@ -95,9 +96,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<
 			signal: extra.signal,
 			onElicitation: (elicitation) => forwardOfficialElicitationToMcpClient(server, elicitation, extra.signal),
 		});
+		const spilled = await spillOversizedTextBlocks(response.content);
 		const result: CallToolResult = {
 			// SAFETY: app-server returns MCP CallToolResult content blocks; the broker already verifies the JSON object envelope.
-			content: response.content as CallToolResult["content"],
+			content: spilled.content as CallToolResult["content"],
 			isError: response.isError,
 		};
 		const structuredContent = z.record(z.string(), z.json()).safeParse(response.structuredContent);

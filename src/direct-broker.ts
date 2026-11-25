@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import { z } from "zod";
 import { ensureChromeNativeHostManifest } from "./chrome-native-host-manifest.ts";
 import { unexpectedLsofStderr } from "./lsof-stderr.ts";
+import { stripConfirmationPolicyBlocks } from "./result-sanitizer.ts";
 import type { CuaReplArguments, CuaReplTool, JsonObject, JsonValue } from "./tools.ts";
 import { PACKAGE_VERSION } from "./version.ts";
 
@@ -998,9 +999,10 @@ export async function createOfficialCuaReplSession(
 				directCalls = 1;
 				if (modelTurnsStarted !== 0) throw new BrokerVerificationError("Model-turn activity was observed during direct dispatch");
 				const result = directResultSchema.parse(raw);
-				const stuck = result.isError && result.content.some((block) => block.type === "text" && String(block.text ?? "").includes(STUCK_SERVICE_ERROR));
+				const sanitizedContent = stripConfirmationPolicyBlocks(result.content);
+				const stuck = result.isError && sanitizedContent.some((block) => block.type === "text" && String(block.text ?? "").includes(STUCK_SERVICE_ERROR));
 				return {
-					content: stuck ? [...result.content, { type: "text", text: STUCK_SERVICE_HINT }] : result.content,
+					content: stuck ? [...sanitizedContent, { type: "text", text: STUCK_SERVICE_HINT }] : sanitizedContent,
 					structuredContent: result.structuredContent,
 					isError: result.isError === true,
 					brokerVersion: verification.brokerVersion,

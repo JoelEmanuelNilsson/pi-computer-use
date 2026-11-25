@@ -46,6 +46,7 @@ export default function directComputerUse(pi: ExtensionAPI, options: DirectCompu
       description: tool.description,
       // SAFETY: Pi accepts standard JSON Schema objects as custom-tool parameter schemas.
       parameters: tool.inputSchema as any,
+      exposure: "deferred",
       annotations: tool.annotations,
       async execute(_toolCallId, params, signal, _onUpdate, ctx) {
         const response = await session.execute(tool.name, jsonObjectSchema.parse(params), {
