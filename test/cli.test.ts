@@ -12,21 +12,21 @@ const serverPath = path.resolve("src/mcp-server.ts");
 function run(stateRoot: string, args: string[]) {
 	return execFileAsync(process.execPath, [serverPath, ...args], {
 		cwd: process.cwd(),
-		env: { ...process.env, CODEX_COMPUTER_USE_HOME: stateRoot },
+		env: { ...process.env, PI_COMPUTER_USE_HOME: stateRoot },
 	});
 }
 
 test("CLI exposes durable no-permissions status and no mode-selection route", async () => {
-	const stateRoot = await mkdtemp(path.join(os.tmpdir(), "direct-computer-use-cli-test."));
+	const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pi-computer-use-cli-test."));
 	try {
 		const { stdout } = await run(stateRoot, ["--status"]);
 		const status = JSON.parse(stdout);
 		assert.equal(status.permissionMode, "no-permissions");
 		assert.deepEqual(status.tools, ["js", "js_reset"]);
 
-		await assert.rejects(run(stateRoot, ["--configure", "safe"]), /Usage:/);
+		await assert.rejects(run(stateRoot, ["--configure", "safe"]), /Usage: pi-computer-use/);
 		await assert.rejects(access(path.join(stateRoot, "config.json")));
-		await assert.rejects(access(path.join(stateRoot, "audit", "direct-computer-use.jsonl")));
+		await assert.rejects(access(path.join(stateRoot, "audit", "pi-computer-use.jsonl")));
 	} finally {
 		await rm(stateRoot, { recursive: true, force: true });
 	}

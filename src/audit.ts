@@ -2,13 +2,13 @@ import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open } from "node:fs/promises";
 import path from "node:path";
 import type { DirectMethod } from "./legacy/tools.ts";
+import { AUDIT_LOG_FILENAME } from "./state-root.ts";
 import type { CuaReplTool } from "./tools.ts";
 
 export interface AuditRecord {
 	timestamp: string;
 	runId: string;
 	method: CuaReplTool | DirectMethod | "invalid_request";
-	/** Hashed target app, recorded by the deprecated typed-tool route only. */
 	app?: string | null;
 	inputBytes: number;
 	outcome: string;
@@ -39,7 +39,7 @@ export async function appendAudit(stateDir: string, record: AuditRecord): Promis
 	await ensurePrivateDirectory(stateDir);
 	const auditDir = path.join(stateDir, "audit");
 	await ensurePrivateDirectory(auditDir);
-	const auditPath = path.join(auditDir, "direct-computer-use.jsonl");
+	const auditPath = path.join(auditDir, AUDIT_LOG_FILENAME);
 	const flags = constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW;
 	const handle = await open(auditPath, flags, 0o600);
 	try {

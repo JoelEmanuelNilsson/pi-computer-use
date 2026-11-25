@@ -1,8 +1,8 @@
-import path from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import { computerUseStatus, selectComputerUseRoute, type ComputerUseRoute } from "../../src/direct-service.ts";
 import { DirectSessionExecutor } from "../../src/session-executor.ts";
+import { resolvePiStateRoot } from "../../src/state-root.ts";
 import type { CuaReplTool, JsonObject } from "../../src/tools.ts";
 import { handleOfficialElicitation, toPiContent } from "./content.ts";
 import { registerLegacyComputerUse, type LegacyComputerUseSession } from "./legacy.ts";
@@ -11,20 +11,18 @@ export { handleOfficialElicitation, toPiContent } from "./content.ts";
 
 const jsonObjectSchema = z.record(z.string(), z.json());
 
-/** Pi tool names for the official cua_repl tools. The official instructions call `js` "cua_repl". */
 export const PI_TOOL_NAMES = { js: "cua_repl", js_reset: "cua_repl_reset" } as const satisfies Record<CuaReplTool, string>;
 
 type ComputerUseSession = Pick<DirectSessionExecutor, "execute" | "endTurn" | "close">;
 
-interface DirectComputerUseOptions {
+interface PiComputerUseOptions {
   session?: ComputerUseSession;
   legacySession?: LegacyComputerUseSession;
-  /** Test-only route override. */
   route?: ComputerUseRoute;
 }
 
-export default function directComputerUse(pi: ExtensionAPI, options: DirectComputerUseOptions = {}) {
-  const stateRoot = process.env.CODEX_COMPUTER_USE_HOME || path.join(getAgentDir(), "direct-computer-use");
+export default function piComputerUse(pi: ExtensionAPI, options: PiComputerUseOptions = {}) {
+  const stateRoot = resolvePiStateRoot(getAgentDir());
   const route = options.route ?? selectComputerUseRoute(stateRoot);
 
   pi.registerCommand("computer-use-status", {

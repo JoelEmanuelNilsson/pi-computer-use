@@ -81,7 +81,7 @@ test("actions dispatch without wrapper prompts or contentful audit", async () =>
 		);
 		assert.equal(response.isError, false);
 		assert.deepEqual(observed, { tool: "js", args: { code } });
-		const auditText = await readFile(path.join(root, "audit", "direct-computer-use.jsonl"), "utf8");
+		const auditText = await readFile(path.join(root, "audit", "pi-computer-use.jsonl"), "utf8");
 		assert.doesNotMatch(auditText, /arbitrary direct action|TextEdit/);
 		const audit = JSON.parse(auditText);
 		assert.equal(audit.modelTurnsStarted, 0);
@@ -110,7 +110,7 @@ test("broker failures preserve architecture evidence in audit", async () => {
 			),
 			/model activity/,
 		);
-		const audit = JSON.parse(await readFile(path.join(root, "audit", "direct-computer-use.jsonl"), "utf8"));
+		const audit = JSON.parse(await readFile(path.join(root, "audit", "pi-computer-use.jsonl"), "utf8"));
 		assert.equal(audit.directCalls, 1);
 		assert.equal(audit.modelTurnsStarted, 1);
 		assert.equal(audit.elicitationRequests, 1);
@@ -128,7 +128,7 @@ test("official tool errors remain errors without entering audit content", async 
 			deps(root, async () => brokerResult("Official denial details", true)),
 		);
 		assert.equal(response.isError, true);
-		const auditText = await readFile(path.join(root, "audit", "direct-computer-use.jsonl"), "utf8");
+		const auditText = await readFile(path.join(root, "audit", "pi-computer-use.jsonl"), "utf8");
 		const audit = JSON.parse(auditText);
 		assert.equal(audit.outcome, "official_error");
 		assert.ok(audit.resultBytes > 0);
@@ -149,7 +149,7 @@ test("transport failures and cancellation are audited without inventing broker e
 				callTool: async () => { throw error; },
 			}), (caught) => caught === error);
 		}
-		const records = (await readFile(path.join(root, "audit", "direct-computer-use.jsonl"), "utf8"))
+		const records = (await readFile(path.join(root, "audit", "pi-computer-use.jsonl"), "utf8"))
 			.trim().split("\n").map((line) => JSON.parse(line));
 		assert.deepEqual(records.map((record) => record.outcome), ["broker_failed", "cancelled"]);
 		for (const record of records) {

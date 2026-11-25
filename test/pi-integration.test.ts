@@ -168,7 +168,7 @@ test("Pi registers the official cua_repl tools as deferred tools and ends the tu
 		async close() { events.push("close"); },
 	}));
 	assert.deepEqual(commands, ["computer-use-status"]);
-	const route = selectComputerUseRoute(process.env.CODEX_COMPUTER_USE_HOME || path.join(getAgentDir(), "direct-computer-use"));
+	const route = selectComputerUseRoute(process.env.PI_COMPUTER_USE_HOME || path.join(getAgentDir(), "computer-use"));
 	assert.equal(route.kind, "cua_repl");
 	assert.deepEqual(tools.map((tool) => tool.name), ["cua_repl", "cua_repl_reset"]);
 	for (const [index, definition] of route.official.tools.entries()) {
@@ -233,7 +233,7 @@ test("broker setup failures remain audited", async () => {
 			executor.execute("js", { code: "1" }, { stateRoot: root }),
 			/verified broker setup failed/,
 		);
-		const audit = JSON.parse(await readFile(path.join(root, "audit", "direct-computer-use.jsonl"), "utf8"));
+		const audit = JSON.parse(await readFile(path.join(root, "audit", "pi-computer-use.jsonl"), "utf8"));
 		assert.equal(audit.outcome, "broker_failed");
 		assert.equal(audit.directCalls, 0);
 	} finally {

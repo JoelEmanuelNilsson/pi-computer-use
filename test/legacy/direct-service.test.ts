@@ -118,7 +118,7 @@ test("mutating methods dispatch without wrapper prompts or contentful audit", as
 		);
 		assert.equal(response.isError, false);
 		assert.deepEqual(observed, { method: "type_text", args: { app: "TextEdit", text: "arbitrary direct action" } });
-		const auditText = await readFile(path.join(root, "audit", "direct-computer-use.jsonl"), "utf8");
+		const auditText = await readFile(path.join(root, "audit", "pi-computer-use.jsonl"), "utf8");
 		assert.doesNotMatch(auditText, /arbitrary direct action|TextEdit/);
 		const audit = JSON.parse(auditText);
 		assert.equal(audit.modelTurnsStarted, 0);
@@ -147,7 +147,7 @@ test("broker failures preserve architecture evidence in audit", async () => {
 			),
 			/model activity/,
 		);
-		const audit = JSON.parse(await readFile(path.join(root, "audit", "direct-computer-use.jsonl"), "utf8"));
+		const audit = JSON.parse(await readFile(path.join(root, "audit", "pi-computer-use.jsonl"), "utf8"));
 		assert.equal(audit.directCalls, 1);
 		assert.equal(audit.modelTurnsStarted, 1);
 		assert.equal(audit.elicitationRequests, 1);
@@ -165,7 +165,7 @@ test("official tool errors remain errors without entering audit content", async 
 			deps(root, async () => brokerResult("Official denial details", true)),
 		);
 		assert.equal(response.isError, true);
-		const auditText = await readFile(path.join(root, "audit", "direct-computer-use.jsonl"), "utf8");
+		const auditText = await readFile(path.join(root, "audit", "pi-computer-use.jsonl"), "utf8");
 		const audit = JSON.parse(auditText);
 		assert.equal(audit.outcome, "official_error");
 		assert.ok(audit.resultBytes > 0);

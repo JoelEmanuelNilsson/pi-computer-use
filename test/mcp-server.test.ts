@@ -18,18 +18,18 @@ function stringEnvironment(): Record<string, string> {
 }
 
 test("stdio MCP exposes the official cua_repl tools and status", async () => {
-	const stateRoot = await mkdtemp(path.join(os.tmpdir(), "direct-computer-use-mcp-test."));
+	const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pi-computer-use-mcp-test."));
 	const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
 	const transport = new StdioClientTransport({
 		command: process.execPath,
 		args: [path.resolve("src/mcp-server.ts")],
 		cwd: process.cwd(),
-		env: { ...stringEnvironment(), CODEX_COMPUTER_USE_HOME: stateRoot },
+		env: { ...stringEnvironment(), PI_COMPUTER_USE_HOME: stateRoot },
 		stderr: "pipe",
 	});
 	try {
 		await client.connect(transport);
-		assert.deepEqual(client.getServerVersion(), { name: "codex-computer-use-mcp", version: packageVersion });
+		assert.deepEqual(client.getServerVersion(), { name: "pi-computer-use", version: packageVersion });
 		const route = selectComputerUseRoute(stateRoot);
 		assert.equal(route.kind, "cua_repl");
 		const official = route.official;

@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
-import { homedir } from "node:os";
-import path from "node:path";
 import { z } from "zod";
 import { appendAudit } from "./audit.ts";
+import { resolveStandaloneStateRoot } from "./state-root.ts";
 import {
 	callOfficialCuaRepl,
 	DirectBrokerCallError,
@@ -46,7 +45,7 @@ export interface DirectServiceDependencies {
 }
 
 export function defaultStateRoot(): string {
-	return process.env.CODEX_COMPUTER_USE_HOME || path.join(homedir(), ".direct-computer-use");
+	return resolveStandaloneStateRoot();
 }
 
 function inputByteCount(value: JsonValue): number {

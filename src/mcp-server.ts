@@ -25,18 +25,17 @@ if (cliArgs.length > 0) {
 		console.log(JSON.stringify(computerUseStatus(selectComputerUseRoute()), null, 2));
 		process.exit(0);
 	}
-	console.error("Usage: codex-computer-use-mcp [--status]");
+	console.error("Usage: pi-computer-use [--status]");
 	process.exit(1);
 }
 
 const route = selectComputerUseRoute();
 const serverOptions: ServerOptions = { capabilities: { tools: {} } };
 if (route.kind === "cua_repl" && route.official.instructions) serverOptions.instructions = route.official.instructions;
-const server = new Server({ name: "codex-computer-use-mcp", version: PACKAGE_VERSION }, serverOptions);
+const server = new Server({ name: "pi-computer-use", version: PACKAGE_VERSION }, serverOptions);
 type Dependencies = Pick<DirectServiceDependencies, "signal" | "onElicitation">;
 function routeTools() {
 	if (route.kind === "cua_repl") {
-		// agent-default (not a user rule): 2026-11-05. MCP has no turn boundary, so a quiet minute ends the turn.
 		const executor = new DirectSessionExecutor({ idleTurnEndMs: 60_000 });
 		return {
 			definitions: route.official.tools,
@@ -48,7 +47,6 @@ function routeTools() {
 			close: () => executor.close(),
 		};
 	}
-	// Deprecated typed tools for ChatGPT without its unified runtime, with their 0.6 idle close.
 	const executor = new LegacySessionExecutor({ idleTimeoutMs: 120_000 });
 	return {
 		definitions: COMPUTER_USE_METHODS.map((method) => ({

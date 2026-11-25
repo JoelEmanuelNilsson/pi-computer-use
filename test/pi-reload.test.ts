@@ -10,10 +10,10 @@ import test from "node:test";
 test("after a package update, Pi reload runs the updated adapter code", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "computer-use-pi-reload."));
 	const projectRoot = process.cwd();
-	const installed = path.join(root, "node_modules", "codex-computer-use-mcp");
+	const installed = path.join(root, "node_modules", "pi-computer-use");
 	const pi = spawn(path.join(projectRoot, "node_modules", ".bin", "pi"), ["--mode", "rpc", "--no-session"], {
 		cwd: root,
-		env: { ...process.env, PI_CODING_AGENT_DIR: path.join(root, "agent"), CODEX_COMPUTER_USE_HOME: path.join(root, "state") },
+		env: { ...process.env, PI_CODING_AGENT_DIR: path.join(root, "agent"), PI_COMPUTER_USE_HOME: path.join(root, "state") },
 	});
 	try {
 		for (const entry of ["package.json", "src", "dist", "integrations"]) await cp(path.join(projectRoot, entry), path.join(installed, entry), { recursive: true });

@@ -1,7 +1,7 @@
 {
-  "name": "codex-computer-use-mcp",
+  "name": "pi-computer-use",
   "version": "0.7.1",
-  "description": "Give Pi and MCP clients the official macOS Computer Use runtime that ChatGPT uses, without a nested model.",
+  "description": "Pi native macOS Computer Use for desktop apps and Chrome, running without a nested model.",
   "author": "Thomas Mustier",
   "license": "MIT",
   "type": "module",
@@ -24,7 +24,7 @@
     ]
   },
   "bin": {
-    "codex-computer-use-mcp": "dist/mcp-server.js"
+    "pi-computer-use": "dist/mcp-server.js"
   },
   "files": [
     "dist",
@@ -68,10 +68,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tmustier/codex-computer-use-mcp.git"
+    "url": "git+https://github.com/JoelEmanuelNilsson/pi-computer-use.git"
   },
   "bugs": {
-    "url": "https://github.com/tmustier/codex-computer-use-mcp/issues"
+    "url": "https://github.com/JoelEmanuelNilsson/pi-computer-use/issues"
   },
-  "homepage": "https://github.com/tmustier/codex-computer-use-mcp#readme"
+  "homepage": "https://github.com/JoelEmanuelNilsson/pi-computer-use#readme"
 }

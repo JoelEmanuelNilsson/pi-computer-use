@@ -27,7 +27,7 @@ test("audit is mode-0600 metadata without arguments, output, or secrets", async 
 	const root = await mkdtemp(path.join(os.tmpdir(), "direct-audit-test."));
 	try {
 		await appendAudit(root, record);
-		const auditPath = path.join(root, "audit", "direct-computer-use.jsonl");
+		const auditPath = path.join(root, "audit", "pi-computer-use.jsonl");
 		assert.equal((await stat(auditPath)).mode & 0o777, 0o600);
 		const parsed = JSON.parse((await readFile(auditPath, "utf8")).trim());
 		assert.equal(parsed.method, "js");
@@ -53,7 +53,7 @@ test("audit refuses symlinked state and log targets", async () => {
 
 		const state = path.join(root, "state");
 		await appendAudit(state, { ...record, runId: "seed" });
-		const log = path.join(state, "audit", "direct-computer-use.jsonl");
+		const log = path.join(state, "audit", "pi-computer-use.jsonl");
 		await rm(log);
 		await symlink(outside, log);
 		await assert.rejects(() => appendAudit(state, record));

@@ -200,7 +200,7 @@ test("broker setup failures remain audited", async () => {
 			executor.execute("get_app_state", { app: "TextEdit" }, { stateRoot: root }),
 			/verified broker setup failed/,
 		);
-		const audit = JSON.parse(await readFile(path.join(root, "audit", "direct-computer-use.jsonl"), "utf8"));
+		const audit = JSON.parse(await readFile(path.join(root, "audit", "pi-computer-use.jsonl"), "utf8"));
 		assert.equal(audit.outcome, "broker_failed");
 		assert.equal(audit.directCalls, 0);
 	} finally {

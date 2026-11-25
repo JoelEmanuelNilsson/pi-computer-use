@@ -69,7 +69,7 @@ test("stdio MCP serves the ten typed tools and says the route is deprecated", as
 		await client.connect(new StdioClientTransport({
 			command: process.execPath,
 			args: [path.resolve("src/mcp-server.ts")],
-			env: { ...env, CODEX_COMPUTER_USE_HOME: stateRoot },
+			env: { ...env, PI_COMPUTER_USE_HOME: stateRoot },
 			stderr: "pipe",
 		}));
 		const listed = await client.listTools();

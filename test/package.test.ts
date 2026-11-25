@@ -70,7 +70,7 @@ test("registry and git packages install and start from a plain npm consumer", as
 			await writeFile(path.join(consumer, "package.json"), '{"private":true}\n');
 			await execFileAsync("npm", ["install", "--no-audit", "--no-fund", "--allow-git=all", source], { cwd: consumer });
 
-			const installedRoot = path.join(consumer, "node_modules", "codex-computer-use-mcp");
+			const installedRoot = path.join(consumer, "node_modules", "pi-computer-use");
 			await assert.rejects(access(path.join(consumer, "node_modules", "typescript")));
 			await assert.rejects(access(path.join(consumer, "node_modules", "@types", "node")));
 
