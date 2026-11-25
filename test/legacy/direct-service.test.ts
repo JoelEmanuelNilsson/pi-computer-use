@@ -96,10 +96,10 @@ test("direct service forwards elicitation handling", async () => {
 				return brokerResult();
 			}),
 			onElicitation,
-			supportsOpenAiFormElicitation: true,
+			supportsOpaqueFormElicitation: true,
 		});
 		assert.equal(observedOptions.onElicitation, onElicitation);
-		assert.equal(observedOptions.supportsOpenAiFormElicitation, true);
+		assert.equal(observedOptions.supportsOpaqueFormElicitation, true);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

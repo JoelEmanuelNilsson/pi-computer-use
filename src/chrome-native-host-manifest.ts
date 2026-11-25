@@ -12,7 +12,7 @@ const DEFAULT_EXTENSION_IDS = [
 	"hehggadaopoacecdllhhajmbjkdcmajg",
 	"odlomjlbamekndcpllcnffbgeohgkmjh",
 ];
-const MANIFEST_DESCRIPTION = "ChatGPT browser native messaging host";
+const MANIFEST_DESCRIPTION = "Pi Computer Use browser native messaging host";
 
 const extensionIdsConfigSchema = z.object({
 	extensionHostName: z.string().min(1).optional(),
@@ -79,7 +79,7 @@ function readChromeExtensionMetadata(versionDir: string): ChromeExtensionMetadat
 			};
 		}
 	} catch {
-		// Fall back to the stable prod extension metadata.
+		return { hostName: DEFAULT_EXTENSION_HOST_NAME, extensionIds: DEFAULT_EXTENSION_IDS };
 	}
 	return { hostName: DEFAULT_EXTENSION_HOST_NAME, extensionIds: DEFAULT_EXTENSION_IDS };
 }
@@ -116,7 +116,6 @@ export function ensureChromeNativeHostManifest(
 				return { manifestPath, hostBinaryPath, updated: false };
 			}
 		} catch {
-			// Rewrite unreadable manifest.
 		}
 	}
 

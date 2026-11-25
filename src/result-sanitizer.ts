@@ -66,10 +66,10 @@ export async function spillOversizedTextBlocks(
 		keptBytes += lineBytes;
 	}
 	const keptText = keptLines.join("\n");
-	const tempDir = await mkdtemp(path.join(os.tmpdir(), "computer-use-output-"));
+	const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-computer-use-output-"));
 	const fullOutputPath = path.join(tempDir, "output.txt");
 	await writeFile(fullOutputPath, fullText, { encoding: "utf8", mode: 0o600 });
-	const notice = `\n\n[Computer Use output truncated: showing ${keptLines.length} of ${lines.length} lines (${keptBytes} of ${totalBytes} bytes). Full output saved to: ${fullOutputPath}]`;
+	const notice = `\n\n[Pi Computer Use output truncated: showing ${keptLines.length} of ${lines.length} lines (${keptBytes} of ${totalBytes} bytes). Full output saved to: ${fullOutputPath}]`;
 
 	const result: JsonObject[] = [];
 	let textIndex = 0;

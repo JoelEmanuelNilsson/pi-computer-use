@@ -58,10 +58,10 @@ test("direct service forwards elicitation handling", async () => {
 				return brokerResult();
 			}),
 			onElicitation,
-			supportsOpenAiFormElicitation: true,
+			supportsOpaqueFormElicitation: true,
 		});
 		assert.equal(observedOptions.onElicitation, onElicitation);
-		assert.equal(observedOptions.supportsOpenAiFormElicitation, true);
+		assert.equal(observedOptions.supportsOpaqueFormElicitation, true);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
@@ -169,8 +169,8 @@ test("transport failures and cancellation are audited without inventing broker e
 test("cuaReplToolDefinitions and selectComputerUseRoute stay ready when overrides omit tools", async () => {
 	const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "direct-service-overrides-test.")));
 	try {
-		const codexPath = path.join(root, "codex");
-		await writeFile(codexPath, "", { mode: 0o755 });
+		const appServerPath = path.join(root, "codex");
+		await writeFile(appServerPath, "", { mode: 0o755 });
 
 		for (const [name, env, expectedInstructions] of [
 			["server-instructions-only", { NODE_REPL_TOOL_OVERRIDES: JSON.stringify({ server_instructions: "Follow cua_repl guidance." }) }, "Follow cua_repl guidance."],
@@ -186,7 +186,7 @@ test("cuaReplToolDefinitions and selectComputerUseRoute stay ready when override
 			await writeFile(cuaReplConfigPath, JSON.stringify({
 				mcpServers: { cua_repl: { command: "/usr/bin/true", args: [], env } },
 			}));
-			await writeFile(path.join(root, "config.json"), JSON.stringify({ codexPath, cuaReplConfigPath }));
+			await writeFile(path.join(root, "config.json"), JSON.stringify({ appServerPath, cuaReplConfigPath }));
 
 			const route = selectComputerUseRoute(root);
 			assert.equal(route.kind, "cua_repl", name);

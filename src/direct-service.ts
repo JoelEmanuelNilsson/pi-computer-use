@@ -40,7 +40,7 @@ export interface DirectServiceDependencies {
 	onElicitation?: (
 		request: DirectBrokerElicitationRequest,
 	) => DirectBrokerElicitationResponse | Promise<DirectBrokerElicitationResponse>;
-	supportsOpenAiFormElicitation?: boolean;
+	supportsOpaqueFormElicitation?: boolean;
 	callTool?: typeof callOfficialCuaRepl;
 }
 
@@ -75,7 +75,7 @@ export async function executeDirectTool(raw: JsonValue, deps: DirectServiceDepen
 			resultContentTypes: [],
 			resultBytes: 0,
 		});
-		throw new Error("Direct Computer Use request did not name a cua_repl tool");
+		throw new Error("Pi Computer Use request did not name a cua_repl tool");
 	}
 	const { tool, arguments: args } = parsed.data;
 	const timeout = z.number().safeParse(args.timeout_ms);
@@ -84,15 +84,14 @@ export async function executeDirectTool(raw: JsonValue, deps: DirectServiceDepen
 	try {
 		const broker = await (deps.callTool ?? callOfficialCuaRepl)(tool, args, {
 			signal: deps.signal,
-			// Leave room beyond node_repl's execution timeout, with the existing two-minute floor.
 			timeoutMs: Math.max(120_000, executionMs + 30_000),
 			onElicitation: deps.onElicitation,
-			supportsOpenAiFormElicitation: deps.supportsOpenAiFormElicitation,
+			supportsOpaqueFormElicitation: deps.supportsOpaqueFormElicitation,
 			configPath: pathConfigFile(stateRoot),
 		});
 		result = { ok: true, broker };
 	} catch (error) {
-		result = { ok: false, error: error instanceof Error ? error : new Error("Direct Computer Use failed") };
+		result = { ok: false, error: error instanceof Error ? error : new Error("Pi Computer Use failed") };
 	}
 
 	const brokerFailure = !result.ok && result.error instanceof DirectBrokerCallError ? result.error : undefined;
@@ -129,7 +128,7 @@ type DirectStatus = {
 	configPath: string;
 	tools: CuaReplTool[];
 } & (
-	| { brokerVerified: true; brokerVersion: string; clientBuild: string; codexPath: string; nodeReplPath: string; cuaReplConfigPath: string }
+	| { brokerVerified: true; brokerVersion: string; clientBuild: string; appServerPath: string; nodeReplPath: string; cuaReplConfigPath: string }
 	| { brokerVerified: false; brokerError: string }
 );
 
@@ -141,8 +140,8 @@ export function getDirectStatus(stateRoot = defaultStateRoot()): DirectStatus {
 		tools: [...CUA_REPL_TOOLS],
 	};
 	try {
-		const { codexPath, brokerVersion, clientBuild, cuaRepl } = verifyOfficialDirectBroker({ configPath: status.configPath });
-		return { ...status, brokerVerified: true, codexPath, brokerVersion, clientBuild, nodeReplPath: cuaRepl.nodeReplPath, cuaReplConfigPath: cuaRepl.configPath };
+		const { appServerPath, brokerVersion, clientBuild, cuaRepl } = verifyOfficialDirectBroker({ configPath: status.configPath });
+		return { ...status, brokerVerified: true, appServerPath, brokerVersion, clientBuild, nodeReplPath: cuaRepl.nodeReplPath, cuaReplConfigPath: cuaRepl.configPath };
 	} catch (error) {
 		return { ...status, brokerVerified: false, brokerError: error instanceof Error ? error.message : String(error) };
 	}
@@ -150,14 +149,8 @@ export function getDirectStatus(stateRoot = defaultStateRoot()): DirectStatus {
 
 export type ComputerUseRoute =
 	| { kind: "cua_repl"; official: CuaReplToolSet }
-	/** Deprecated: ChatGPT without its unified runtime still uses the ten typed tools. */
 	| { kind: "legacy"; reason: string };
 
-/**
- * Follow ChatGPT: use its cua_repl runtime when it has prepared one, and otherwise the ten typed
- * tools it still uses itself. Errors other than a missing runtime keep the cua_repl tools, whose
- * descriptions then say why Computer Use is not ready.
- */
 export function selectComputerUseRoute(stateRoot = defaultStateRoot()): ComputerUseRoute {
 	try {
 		return { kind: "cua_repl", official: cuaReplToolDefinitions(readOfficialCuaReplServer({ configPath: pathConfigFile(stateRoot) }).env) };
@@ -169,8 +162,8 @@ export function selectComputerUseRoute(stateRoot = defaultStateRoot()): Computer
 			tools: [
 				{
 					name: "js",
-					description: "Control native apps or browsers on the user's computer through OpenAI's official Computer Use JavaScript runtime (cua_repl)." + note,
-					inputSchema: { type: "object", properties: { code: { type: "string", description: "JavaScript to run in the official cua_repl runtime." } }, additionalProperties: false },
+					description: "Control native macOS apps and browsers with Pi Computer Use (cua_repl)." + note,
+					inputSchema: { type: "object", properties: { code: { type: "string", description: "JavaScript to run in the Pi Computer Use cua_repl session." } }, additionalProperties: false },
 					annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
 				},
 				{
@@ -184,7 +177,6 @@ export function selectComputerUseRoute(stateRoot = defaultStateRoot()): Computer
 	}
 }
 
-/** Status of the route this process selected, so it matches the registered tools. */
 export function computerUseStatus(route: ComputerUseRoute, stateRoot = defaultStateRoot()) {
 	return route.kind === "legacy"
 		? { route: "legacy", deprecated: `Using the older typed Computer Use tools because ${route.reason}`, ...getLegacyStatus(stateRoot) }

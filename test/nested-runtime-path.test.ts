@@ -33,7 +33,7 @@ test("the app-server runs ChatGPT's node_repl directly, with its official settin
 		const cuaReplConfigPath = path.join(root, "cua.mcp.json");
 		await writeFile(cuaReplConfigPath, JSON.stringify({ mcpServers: { cua_repl: server } }));
 		const configPath = path.join(root, "config.json");
-		await writeFile(configPath, JSON.stringify({ codexPath: alias, cuaReplConfigPath }));
+		await writeFile(configPath, JSON.stringify({ appServerPath: alias, cuaReplConfigPath }));
 		process.env.CODEX_CLI_PATH = "/ambient/unverified/codex";
 
 		t.mock.method(childProcess, "spawnSync", (command: string, args: string[]) => {
@@ -69,7 +69,7 @@ test("the app-server runs ChatGPT's node_repl directly, with its official settin
 
 		const status = service.getDirectStatus(root);
 		assert.ok(status.brokerVerified);
-		assert.equal(status.codexPath, codex);
+		assert.equal(status.appServerPath, codex);
 		assert.equal(status.nodeReplPath, nodeRepl);
 		assert.equal(status.cuaReplConfigPath, cuaReplConfigPath);
 	} finally {

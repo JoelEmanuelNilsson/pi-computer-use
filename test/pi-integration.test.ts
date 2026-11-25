@@ -184,10 +184,10 @@ test("Pi registers the official cua_repl tools as deferred tools and ends the tu
 });
 
 test("cua_repl calls pass their arguments through and return text and images in order", async () => {
-	const calls: Array<{ tool: CuaReplTool; args: CuaReplArguments; supportsOpenAiFormElicitation?: boolean }> = [];
+	const calls: Array<{ tool: CuaReplTool; args: CuaReplArguments; supportsOpaqueFormElicitation?: boolean }> = [];
 	const { tool } = loadAdapter(testSession({
 		async execute(name, args, dependencies) {
-			calls.push({ tool: name, args, supportsOpenAiFormElicitation: dependencies.supportsOpenAiFormElicitation });
+			calls.push({ tool: name, args, supportsOpaqueFormElicitation: dependencies.supportsOpaqueFormElicitation });
 			return {
 				isError: false,
 				content: [
@@ -206,7 +206,7 @@ test("cua_repl calls pass their arguments through and return text and images in 
 	assert.equal(state.isError, false);
 	await tool("js_reset").execute("2", {}, undefined, undefined, headlessContext);
 	assert.deepEqual(calls.map((call) => [call.tool, call.args]), [["js", { code, title: "Opening TextEdit" }], ["js_reset", {}]]);
-	assert.equal(calls.every((call) => call.supportsOpenAiFormElicitation === true), true);
+	assert.equal(calls.every((call) => call.supportsOpaqueFormElicitation === true), true);
 });
 
 test("an official error is returned as an error result that keeps its content", async () => {
@@ -254,7 +254,7 @@ test("retained sessions advertise only the caller's elicitation capability", asy
 	const advertised: boolean[] = [];
 	const createExecutor = () => new DirectSessionExecutor({
 		createSession: async (options) => {
-			advertised.push(options.supportsOpenAiFormElicitation === true);
+			advertised.push(options.supportsOpaqueFormElicitation === true);
 			return fakeSession([], 0);
 		},
 	});
@@ -262,7 +262,7 @@ test("retained sessions advertise only the caller's elicitation capability", asy
 	const piExecutor = createExecutor();
 	try {
 		await genericExecutor.execute("js", { code: "1" }, { stateRoot: root });
-		await piExecutor.execute("js", { code: "1" }, { stateRoot: root, supportsOpenAiFormElicitation: true });
+		await piExecutor.execute("js", { code: "1" }, { stateRoot: root, supportsOpaqueFormElicitation: true });
 		assert.deepEqual(advertised, [false, true]);
 	} finally {
 		await Promise.all([genericExecutor.close(), piExecutor.close()]);
@@ -390,7 +390,7 @@ test("Pi truncates aggregate text to a private spill file without spilling image
 		assert.deepEqual(rendered.content.map((block) => block.type), ["text", "image", "text", "image"]);
 		assert.deepEqual(rendered.content[0], { type: "text", text: first });
 		assert.deepEqual(rendered.content[1], { type: "image", data: "first-image", mimeType: "image/png" });
-		assert.match(rendered.content[2].type === "text" ? rendered.content[2].text : "", /^\n\n\[Official Computer Use text truncated:.*Full output saved to:/s);
+		assert.match(rendered.content[2].type === "text" ? rendered.content[2].text : "", /^\n\n\[Pi Computer Use output truncated:.*Full output saved to:/s);
 		const returnedText = rendered.content.filter((block) => block.type === "text").map((block) => block.text).join("");
 		assert.ok(Buffer.byteLength(returnedText) < 55 * 1024);
 		assert.deepEqual(rendered.content[3], { type: "image", data: "second-image", mimeType: "image/png" });

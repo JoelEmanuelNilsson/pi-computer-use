@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { resolveOfficialCodex, resolveOfficialCuaRepl } from "../src/direct-broker.ts";
+import { resolveOfficialCuaRepl, resolveRuntimeAppServer } from "../src/direct-broker.ts";
 
 type Run = (command: string, args: string[]) => { status: number | null; stdout?: string; stderr?: string };
 
@@ -39,8 +39,7 @@ interface Fixture {
 	server: { command: string; args: string[]; env: Record<string, string>; enabled_tools: string[] };
 }
 
-/** A ChatGPT install whose plugin cache holds the cua_repl entry ChatGPT writes for its version. */
-async function makeChatGpt(root: string, version = "26.1029.61003"): Promise<Fixture> {
+async function makeRuntimeFixture(root: string, version = "26.1029.61003"): Promise<Fixture> {
 	const app = path.join(root, "Applications/ChatGPT.app");
 	const userHome = path.join(root, "user");
 	const codex = await makeExecutable(path.join(app, "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"));
@@ -67,7 +66,7 @@ async function makeChatGpt(root: string, version = "26.1029.61003"): Promise<Fix
 test("reads ChatGPT's own cua_repl entry for the installed version and verifies every executable it names", async () => {
 	const root = realpathSync(await mkdtemp(path.join(os.tmpdir(), "cu-repl-resolution.")));
 	try {
-		const fixture = await makeChatGpt(root);
+		const fixture = await makeRuntimeFixture(root);
 		const verified: string[] = [];
 		const signed = signedBy("2DC432GLL2", fixture.plist);
 		const runSync: Run = (command, args) => {
@@ -91,11 +90,11 @@ test("reads ChatGPT's own cua_repl entry for the installed version and verifies 
 test("a ChatGPT that has not prepared its runtime for this version says to open it or switch to the older tools", async () => {
 	const root = realpathSync(await mkdtemp(path.join(os.tmpdir(), "cu-repl-unprepared.")));
 	try {
-		const fixture = await makeChatGpt(root, "26.1000.1");
+		const fixture = await makeRuntimeFixture(root, "26.1000.1");
 		const plist = { ...fixture.plist, [Object.keys(fixture.plist)[0]!]: "26.1029.61003" };
 		assert.throws(
 			() => resolveOfficialCuaRepl(fixture.codex, { userHome: fixture.userHome, runSync: signedBy("2DC432GLL2", plist) }),
-			/ChatGPT 26\.1029\.61003 has not prepared its Computer Use runtime \(expected .*26\.1029\.61003\/\.mcp\.json\)\..*Open ChatGPT \(`open -a ChatGPT`\).*run \/reload in Pi or restart the MCP server to switch to the older Computer Use tools/,
+			/The runtime dependency \(26\.1029\.61003\) has not prepared its Computer Use runtime config \(expected .*26\.1029\.61003\/\.mcp\.json\)\..*Open the ChatGPT desktop app \(`open -a ChatGPT`\).*run \/reload in Pi or restart the MCP server to fall back to the legacy Computer Use tools/,
 		);
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -105,14 +104,14 @@ test("a ChatGPT that has not prepared its runtime for this version says to open 
 test("an executable in ChatGPT's config with the wrong signing team fails closed", async () => {
 	const root = realpathSync(await mkdtemp(path.join(os.tmpdir(), "cu-repl-wrong-team.")));
 	try {
-		const fixture = await makeChatGpt(root);
+		const fixture = await makeRuntimeFixture(root);
 		const signed = signedBy("2DC432GLL2", fixture.plist);
 		const runSync: Run = (command, args) => args.at(-1) === fixture.node && args[0] === "-dv"
 			? { status: 0, stdout: "", stderr: "TeamIdentifier=NOT_OPENAI\n" }
 			: signed(command, args);
 		assert.throws(
 			() => resolveOfficialCuaRepl(fixture.codex, { userHome: fixture.userHome, runSync }),
-			/node is not signed by the expected OpenAI team/,
+			/node is not signed by the expected Team ID \(2DC432GLL2\)/,
 		);
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -122,17 +121,17 @@ test("an executable in ChatGPT's config with the wrong signing team fails closed
 test("a config that does not name one node_repl, or names a missing one, fails with the out-of-step step", async () => {
 	const root = realpathSync(await mkdtemp(path.join(os.tmpdir(), "cu-repl-shape.")));
 	try {
-		const fixture = await makeChatGpt(root);
+		const fixture = await makeRuntimeFixture(root);
 		const runSync = signedBy("2DC432GLL2", fixture.plist);
 		await writeFile(fixture.configPath, JSON.stringify({ mcpServers: { cua_repl: { ...fixture.server, args: [] } } }));
 		assert.throws(
 			() => resolveOfficialCuaRepl(fixture.codex, { userHome: fixture.userHome, runSync }),
-			/does not name exactly one node_repl executable\. ChatGPT and codex-computer-use-mcp may be out of step/,
+			/does not name exactly one node_repl executable\. Pi Computer Use and its underlying macOS runtime may be out of step/,
 		);
 		await writeFile(fixture.configPath, JSON.stringify({ mcpServers: { cua_repl: { ...fixture.server, args: [path.join(root, "gone/node_repl")] } } }));
 		assert.throws(
 			() => resolveOfficialCuaRepl(fixture.codex, { userHome: fixture.userHome, runSync }),
-			/gone\/node_repl, named by ChatGPT's Computer Use config, does not exist/,
+			/gone\/node_repl, named by the Computer Use runtime config, does not exist/,
 		);
 		await writeFile(fixture.configPath, JSON.stringify({ mcpServers: {} }));
 		assert.throws(
@@ -147,7 +146,7 @@ test("a config that does not name one node_repl, or names a missing one, fails w
 test("uses a configured cuaReplConfigPath, even for a Codex outside an app bundle", async () => {
 	const root = realpathSync(await mkdtemp(path.join(os.tmpdir(), "cu-repl-configured.")));
 	try {
-		const fixture = await makeChatGpt(root);
+		const fixture = await makeRuntimeFixture(root);
 		const custom = path.join(root, "custom.mcp.json");
 		await writeFile(custom, JSON.stringify({ mcpServers: { cua_repl: fixture.server } }));
 		const configPath = path.join(root, "config.json");
@@ -157,7 +156,7 @@ test("uses a configured cuaReplConfigPath, even for a Codex outside an app bundl
 		assert.equal(resolved.configPath, custom);
 		assert.throws(
 			() => resolveOfficialCuaRepl(codex, { userHome: fixture.userHome, runSync: signedBy("2DC432GLL2", fixture.plist) }),
-			/Could not tell which ChatGPT version contains .*Set "cuaReplConfigPath"/,
+			/Could not read the runtime app version for .*Set "cuaReplConfigPath"/,
 		);
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -167,11 +166,11 @@ test("uses a configured cuaReplConfigPath, even for a Codex outside an app bundl
 test("a missing Computer Use service says to install ChatGPT's Computer Use component", async () => {
 	const root = realpathSync(await mkdtemp(path.join(os.tmpdir(), "cu-repl-service.")));
 	try {
-		const fixture = await makeChatGpt(root);
+		const fixture = await makeRuntimeFixture(root);
 		await rm(fixture.computerUseApp, { recursive: true });
 		assert.throws(
 			() => resolveOfficialCuaRepl(fixture.codex, { userHome: fixture.userHome, runSync: signedBy("2DC432GLL2", fixture.plist) }),
-			/Official Computer Use service was not found\. Checked: .*SkyComputerUseService\. Open ChatGPT and install its Computer Use component\./,
+			/Computer Use runtime service was not found\. Checked: .*SkyComputerUseService\. Open the ChatGPT desktop app and install its Computer Use runtime component\./,
 		);
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -184,11 +183,11 @@ test("an invalid signature names the binary and codesign's reason", async () => 
 		const app = path.join(root, "ChatGPT.app");
 		await makeExecutable(path.join(app, "Contents/Resources/codex"));
 		assert.throws(
-			() => resolveOfficialCodex({
-				chatGptAppPaths: [app],
+			() => resolveRuntimeAppServer({
+				runtimeAppPaths: [app],
 				runSync: (command) => command === "/usr/bin/mdfind" ? { status: 0, stdout: "" } : { status: 1, stdout: "", stderr: "codex: a sealed resource is missing or invalid\nmore" },
 			}),
-			/Signature verification failed for codex \(codex: a sealed resource is missing or invalid\)\. If ChatGPT is updating/,
+			/Signature verification failed for codex \(codex: a sealed resource is missing or invalid\)\. If the runtime dependency is updating/,
 		);
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -201,8 +200,8 @@ test("a signature check that does not finish is reported as unfinished, not as a
 		const app = path.join(root, "ChatGPT.app");
 		await makeExecutable(path.join(app, "Contents/Resources/codex"));
 		assert.throws(
-			() => resolveOfficialCodex({ chatGptAppPaths: [app], runSync: () => ({ status: null, stdout: "", stderr: "" }) }),
-			(error: Error) => /Could not check the signature of codex: codesign did not finish within 30 seconds\. ChatGPT may be updating/.test(error.message)
+			() => resolveRuntimeAppServer({ runtimeAppPaths: [app], runSync: () => ({ status: null, stdout: "", stderr: "" }) }),
+			(error: Error) => /Could not check the signature of codex: codesign did not finish within 30 seconds\. The runtime app may be updating/.test(error.message)
 				&& !/Signature verification failed/.test(error.message),
 		);
 	} finally {
@@ -210,24 +209,23 @@ test("a signature check that does not finish is reported as unfinished, not as a
 	}
 });
 
-test("discovers and verifies Codex in a per-user ChatGPT installation", async () => {
+test("discovers and verifies runtime app-server in a per-user app installation", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "cu-user-applications."));
 	try {
 		const systemApp = path.join(root, "Applications/ChatGPT.app");
 		const userApp = path.join(root, "user/Applications/ChatGPT.app");
-		const options = { userHome: path.join(root, "user"), chatGptAppPaths: [systemApp, userApp], runSync: signedBy() };
+		const options = { userHome: path.join(root, "user"), runtimeAppPaths: [systemApp, userApp], runSync: signedBy() };
 		const codex = await makeExecutable(path.join(userApp, "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"));
-		assert.equal(resolveOfficialCodex(options), codex);
-		assert.throws(() => resolveOfficialCodex({ ...options, runSync: signedBy("NOT_OPENAI") }), /not signed by the expected OpenAI team/);
-		// Preserve the system installation's precedence, even when its layout is older.
+		assert.equal(resolveRuntimeAppServer(options), codex);
+		assert.throws(() => resolveRuntimeAppServer({ ...options, runSync: signedBy("NOT_OPENAI") }), /not signed by the expected Team ID \(2DC432GLL2\)/);
 		const systemCodex = await makeExecutable(path.join(systemApp, "Contents/Resources/codex"));
-		assert.equal(resolveOfficialCodex(options), systemCodex);
+		assert.equal(resolveRuntimeAppServer(options), systemCodex);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
 });
 
-test("finds ChatGPT by bundle ID when the classic ChatGPT app holds ChatGPT.app", async () => {
+test("finds runtime app by bundle ID when another app holds ChatGPT.app", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "cu-bundle-id."));
 	try {
 		const classicApp = path.join(root, "Applications/ChatGPT.app");
@@ -241,27 +239,27 @@ test("finds ChatGPT by bundle ID when the classic ChatGPT app holds ChatGPT.app"
 			queries.push(args);
 			return { status: 0, stdout: `${codexApp}\n`, stderr: "" };
 		};
-		const options = { userHome: path.join(root, "user"), chatGptAppPaths: [classicApp], runSync };
-		assert.equal(resolveOfficialCodex(options), codex);
+		const options = { userHome: path.join(root, "user"), runtimeAppPaths: [classicApp], runSync };
+		assert.equal(resolveRuntimeAppServer(options), codex);
 		assert.deepEqual(queries[0], ['kMDItemCFBundleIdentifier == "com.openai.codex"']);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
 });
 
-test("a stale explicit Codex path fails with repair instructions rather than silently selecting another binary", async () => {
+test("a stale explicit appServerPath fails with repair instructions rather than silently selecting another binary", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "cu-stale-codex."));
 	try {
 		const app = path.join(root, "ChatGPT.app");
 		await makeExecutable(path.join(app, "Contents/Resources/codex"));
 		const missing = path.join(root, "old-codex");
 		const configPath = path.join(root, "config.json");
-		await writeFile(configPath, JSON.stringify({ codexPath: missing }));
-		assert.throws(() => resolveOfficialCodex({ configPath, chatGptAppPaths: [app], runSync: signedBy() }), (error: Error) => {
-			assert.match(error.message, /Install or update the official ChatGPT macOS app/);
+		await writeFile(configPath, JSON.stringify({ appServerPath: missing }));
+		assert.throws(() => resolveRuntimeAppServer({ configPath, runtimeAppPaths: [app], runSync: signedBy() }), (error: Error) => {
+			assert.match(error.message, /Install or update the ChatGPT macOS app/);
 			assert.ok(error.message.includes(missing));
 			assert.ok(error.message.includes(configPath));
-			assert.match(error.message, /remove "codexPath".*automatic discovery/);
+			assert.match(error.message, /remove "appServerPath".*automatic discovery/);
 			return true;
 		});
 	} finally {
@@ -269,56 +267,56 @@ test("a stale explicit Codex path fails with repair instructions rather than sil
 	}
 });
 
-test("finds Codex in ChatGPT's current CodexCLI.app layout before the legacy location", async () => {
+test("finds app-server in current CodexCLI.app layout before the legacy location", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "cu-codex-current."));
 	try {
 		const current = path.join(root, "ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex");
 		const legacy = path.join(root, "ChatGPT.app/Contents/Resources/codex");
 		const expected = await makeExecutable(current);
 		await makeExecutable(legacy);
-		assert.equal(resolveOfficialCodex({ chatGptAppPaths: [path.join(root, "ChatGPT.app")], runSync: signedBy() }), expected);
+		assert.equal(resolveRuntimeAppServer({ runtimeAppPaths: [path.join(root, "ChatGPT.app")], runSync: signedBy() }), expected);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
 });
 
-test("falls back to the legacy Codex location on older ChatGPT builds", async () => {
+test("falls back to the legacy app-server location on older builds", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "cu-codex-legacy."));
 	try {
 		const expected = await makeExecutable(path.join(root, "ChatGPT.app/Contents/Resources/codex"));
-		assert.equal(resolveOfficialCodex({ chatGptAppPaths: [path.join(root, "ChatGPT.app")], runSync: signedBy() }), expected);
+		assert.equal(resolveRuntimeAppServer({ runtimeAppPaths: [path.join(root, "ChatGPT.app")], runSync: signedBy() }), expected);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
 });
 
-test("uses a configured Codex path and still verifies its signature", async () => {
+test("uses a configured appServerPath and still verifies its signature", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "cu-codex-configured."));
 	try {
 		const configured = await makeExecutable(path.join(root, "Somewhere/codex"));
 		const configPath = path.join(root, "config.json");
-		await writeFile(configPath, JSON.stringify({ codexPath: configured }));
-		assert.equal(resolveOfficialCodex({ chatGptAppPaths: [], configPath, runSync: signedBy() }), configured);
+		await writeFile(configPath, JSON.stringify({ appServerPath: configured }));
+		assert.equal(resolveRuntimeAppServer({ runtimeAppPaths: [], configPath, runSync: signedBy() }), configured);
 		assert.throws(
-			() => resolveOfficialCodex({ chatGptAppPaths: [], configPath, runSync: signedBy("NOT_OPENAI") }),
-			/not signed by the expected OpenAI team/,
+			() => resolveRuntimeAppServer({ runtimeAppPaths: [], configPath, runSync: signedBy("NOT_OPENAI") }),
+			/not signed by the expected Team ID \(2DC432GLL2\)/,
 		);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
 });
 
-test("reports a missing Codex as not found, naming the checked paths and the config to set", async () => {
+test("reports a missing app-server as not found, naming the checked paths and the config to set", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "cu-codex-missing."));
 	try {
 		const missing = path.join(root, "ChatGPT.app/Contents/Resources/codex");
 		const configPath = path.join(root, "config.json");
 		assert.throws(
-			() => resolveOfficialCodex({ chatGptAppPaths: [path.join(root, "ChatGPT.app")], configPath, runSync: signedBy() }),
-			(error: Error) => error.message.includes("Codex app-server was not found")
+			() => resolveRuntimeAppServer({ runtimeAppPaths: [path.join(root, "ChatGPT.app")], configPath, runSync: signedBy() }),
+			(error: Error) => error.message.includes("Computer Use runtime app-server was not found")
 				&& error.message.includes(missing)
-				&& error.message.includes(`set "codexPath" to its absolute path in ${configPath}`)
-				&& error.message.includes("Install or update the official ChatGPT macOS app")
+				&& error.message.includes(`set "appServerPath" to its absolute path in ${configPath}`)
+				&& error.message.includes("Install or update the ChatGPT macOS app")
 				&& !/Signature verification failed/.test(error.message),
 		);
 	} finally {
@@ -326,15 +324,15 @@ test("reports a missing Codex as not found, naming the checked paths and the con
 	}
 });
 
-test("a missing Codex inside an installed ChatGPT suggests updating this package", async () => {
+test("a missing app-server inside an installed runtime app suggests updating this package", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "cu-codex-moved."));
 	try {
 		const app = path.join(root, "ChatGPT.app");
 		await mkdir(path.join(app, "Contents/Resources/new-layout"), { recursive: true });
 		assert.throws(
-			() => resolveOfficialCodex({ chatGptAppPaths: [app], runSync: signedBy() }),
-			(error: Error) => error.message.includes(`ChatGPT is installed at ${app}; if it is up to date, an update may have moved this file.`)
-				&& /update codex-computer-use-mcp to its latest release/.test(error.message),
+			() => resolveRuntimeAppServer({ runtimeAppPaths: [app], runSync: signedBy() }),
+			(error: Error) => error.message.includes(`The runtime app is installed at ${app}; if it is up to date, an update may have moved this file.`)
+				&& /update pi-computer-use/.test(error.message),
 		);
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -346,8 +344,8 @@ test("reads paths from a config file that earlier versions wrote other settings 
 	try {
 		const configured = await makeExecutable(path.join(root, "Somewhere/codex"));
 		const configPath = path.join(root, "config.json");
-		await writeFile(configPath, JSON.stringify({ version: 1, permissionMode: "full-permissions", codexPath: configured }));
-		assert.equal(resolveOfficialCodex({ chatGptAppPaths: [], configPath, runSync: signedBy() }), configured);
+		await writeFile(configPath, JSON.stringify({ version: 1, permissionMode: "full-permissions", appServerPath: configured }));
+		assert.equal(resolveRuntimeAppServer({ runtimeAppPaths: [], configPath, runSync: signedBy() }), configured);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
@@ -357,8 +355,8 @@ test("rejects a config file whose path is not a string", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "cu-config-invalid."));
 	try {
 		const configPath = path.join(root, "config.json");
-		await writeFile(configPath, JSON.stringify({ codexPath: 7 }));
-		assert.throws(() => resolveOfficialCodex({ configPath, runSync: signedBy() }), /must set "codexPath" and "cuaReplConfigPath", when present, to path strings/);
+		await writeFile(configPath, JSON.stringify({ appServerPath: 7 }));
+		assert.throws(() => resolveRuntimeAppServer({ configPath, runSync: signedBy() }), /must set "appServerPath" and "cuaReplConfigPath", when present, to path strings/);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

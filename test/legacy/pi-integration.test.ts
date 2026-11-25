@@ -116,10 +116,10 @@ test("Pi registers the ten official methods as codemode tools without changing t
 });
 
 test("codemode calls share one session and return structured app state", async () => {
-	const calls: Array<{ method: DirectMethod; args: DirectToolArguments; supportsOpenAiFormElicitation?: boolean }> = [];
+	const calls: Array<{ method: DirectMethod; args: DirectToolArguments; supportsOpaqueFormElicitation?: boolean }> = [];
 	const { tool } = loadAdapter({
 		async execute(method, args, dependencies) {
-			calls.push({ method, args, supportsOpenAiFormElicitation: dependencies.supportsOpenAiFormElicitation });
+			calls.push({ method, args, supportsOpaqueFormElicitation: dependencies.supportsOpaqueFormElicitation });
 			if (method !== "get_app_state") return { isError: false, content: [] };
 			return {
 				isError: false,
@@ -146,7 +146,7 @@ test("codemode calls share one session and return structured app state", async (
 	await tool("type_text").execute("3", { app: "TextEdit", text: "hello" }, undefined, undefined, headlessContext);
 	assert.deepEqual(calls.map((call) => call.method), ["get_app_state", "click", "type_text"]);
 	assert.deepEqual(calls[1].args, { app: "TextEdit", element_index: "7" });
-	assert.equal(calls.every((call) => call.supportsOpenAiFormElicitation === true), true);
+	assert.equal(calls.every((call) => call.supportsOpaqueFormElicitation === true), true);
 });
 
 test("list_apps returns the official text inventory unchanged", async () => {
@@ -213,7 +213,7 @@ test("retained sessions advertise only the caller's elicitation capability", asy
 	const advertised: boolean[] = [];
 	const createExecutor = () => new DirectSessionExecutor({
 		createSession: async (options) => {
-			advertised.push(options.supportsOpenAiFormElicitation === true);
+			advertised.push(options.supportsOpaqueFormElicitation === true);
 			return {
 				async call() { return brokerResult("state"); },
 				async close() {},
@@ -226,7 +226,7 @@ test("retained sessions advertise only the caller's elicitation capability", asy
 		await genericExecutor.execute("get_app_state", { app: "TextEdit" }, { stateRoot: root });
 		await piExecutor.execute("get_app_state", { app: "TextEdit" }, {
 			stateRoot: root,
-			supportsOpenAiFormElicitation: true,
+			supportsOpaqueFormElicitation: true,
 		});
 		assert.deepEqual(advertised, [false, true]);
 	} finally {

@@ -74,7 +74,7 @@ test("spills oversized text outputs to a private file without touching images", 
 		assert.equal(await readFile(spilled.fullOutputPath, "utf8"), huge);
 		assert.equal((await stat(spilled.fullOutputPath)).mode & 0o777, 0o600);
 		assert.equal(spilled.content.length, 2);
-		assert.match(String(spilled.content[0].text), /Computer Use output truncated:.*Full output saved to:/);
+		assert.match(String(spilled.content[0].text), /Pi Computer Use output truncated:.*Full output saved to:/);
 		assert.deepEqual(spilled.content[1], { type: "image", data: "png-bytes", mimeType: "image/png" });
 	} finally {
 		await rm(path.dirname(spilled.fullOutputPath), { recursive: true, force: true });

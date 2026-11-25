@@ -126,8 +126,8 @@ test("direct broker isolates credentials and ends its native turn through the of
 		assert.equal(records.find((item) => item.method === "thread/start")?.params?.sandbox, "danger-full-access");
 		assert.deepEqual(records.find((item) => item.method === "initialize")?.params?.capabilities, { mcpServerOpenaiFormElicitation: false });
 		assert.ok(records.every((item) => item.hasOpenAIKey === false));
-		assert.ok(records.every((item) => z.string().safeParse(item.codexHome).success && item.codexHome.includes("pi-direct-computer-use.")));
-		assert.ok(records.every((item) => item.home.includes("pi-direct-computer-use.") && item.tmpdir === item.home));
+		assert.ok(records.every((item) => z.string().safeParse(item.codexHome).success && item.codexHome.includes("pi-computer-use.")));
+		assert.ok(records.every((item) => item.home.includes("pi-computer-use.") && item.tmpdir === item.home));
 		assert.ok(records.every((item) => !item.codexHome.includes(path.join(os.homedir(), ".codex"))));
 	} finally {
 		if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey;
@@ -153,7 +153,6 @@ test("one session keeps REPL bindings across turns, and each ended turn gets its
 		assert.equal(records.filter((item) => item.method === "initialize").length, 1);
 		assert.equal(records.filter((item) => item.method === "thread/start").length, 1);
 		assert.deepEqual(records.filter(isCall).map((item) => item.params.tool), ["js", "js", "js", "js_reset", "js"]);
-		// The second endTurn had no calls to end; close ends the second turn.
 		const ended = records.filter(isTurnEnded).map((item) => item.params.arguments.turn_id);
 		assert.equal(ended.length, 2);
 		const turns = records.filter(isCall).map((item) => item.params._meta["x-codex-turn-metadata"].turn_id);
@@ -251,7 +250,7 @@ test("runtime snapshot detects ChatGPT version change, replaced binaries, and up
 			}
 			return { status: 1, stdout: "", stderr: "" };
 		};
-		const resolveOpts = { userHome, chatGptAppPaths: [app], runSync };
+		const resolveOpts = { userHome, runtimeAppPaths: [app], runSync };
 		const snapshot = captureOfficialRuntimeSnapshot(codexPath, {
 			configPath: configV1,
 			nodeReplPath,
@@ -301,7 +300,7 @@ test("direct broker forwards official elicitations and returns the invoking clie
 		let observed: unknown;
 		const result = await callOfficialCuaRepl("js", { code: "1" }, {
 			...options(script, "elicit"),
-			supportsOpenAiFormElicitation: true,
+			supportsOpaqueFormElicitation: true,
 			onElicitation: (request) => {
 				observed = request;
 				return { action: "accept", content: { choice: "allow" }, _meta: { client: "test" } };
@@ -539,7 +538,7 @@ test("drain expiry bounds cancellation and still kills private descendants", asy
 		const childPid = await waitForChildPid(log);
 		const started = Date.now();
 		controller.abort();
-		await assert.rejects(call, (error: Error) => /Direct Computer Use request cancelled/.test(error.message) && !/turn cleanup/.test(error.message));
+		await assert.rejects(call, (error: Error) => /Pi Computer Use request cancelled/.test(error.message) && !/turn cleanup/.test(error.message));
 		assert.ok(Date.now() - started < 4000);
 		assert.throws(() => process.kill(childPid, 0));
 		const records = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
@@ -583,8 +582,8 @@ test("an app-server that rejects its startup settings reports the end of stderr 
 			assert.match(error.message, /Error: invalid type: unit variant, expected string only\nin `web_search`/);
 			assert.equal(error.message.includes("\u001b"), false);
 			assert.ok(error.message.length < 2_000);
-			assert.match(error.message, /out of step \(codex-computer-use-mcp \d+\.\d+\.\d+, test-app-server\)/);
-			assert.match(error.message, /update codex-computer-use-mcp to its latest release/);
+			assert.match(error.message, /out of step \(pi-computer-use \d+\.\d+\.\d+, test-app-server\)/);
+			assert.match(error.message, /update pi-computer-use/);
 			return true;
 		});
 	} finally { await rm(root, { recursive: true, force: true }); }
@@ -595,7 +594,7 @@ test("an app-server protocol error preserves the official text and says how to r
 	try {
 		const { script } = await makeFake(root);
 		await assert.rejects(callOfficialCuaRepl("js", { code: "1" }, options(script, "protocol-drift")), (error: Error) => {
-			assert.match(error.message, /^Official app-server error: Invalid request: unknown variant `thread\/start`, expected one of `initialize`, `thread\/begin`, `thread\/resume`\. ChatGPT and codex-computer-use-mcp may be out of step/);
+			assert.match(error.message, /^Pi Computer Use app-server error: Invalid request: unknown variant `thread\/start`, expected one of `initialize`, `thread\/begin`, `thread\/resume`\. Pi Computer Use and its underlying macOS runtime may be out of step/);
 			return true;
 		});
 	} finally { await rm(root, { recursive: true, force: true }); }

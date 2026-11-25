@@ -41,7 +41,7 @@ export interface DirectServiceDependencies {
 	onElicitation?: (
 		request: DirectBrokerElicitationRequest,
 	) => DirectBrokerElicitationResponse | Promise<DirectBrokerElicitationResponse>;
-	supportsOpenAiFormElicitation?: boolean;
+	supportsOpaqueFormElicitation?: boolean;
 	callTool?: typeof callOfficialDirectTool;
 }
 
@@ -93,7 +93,7 @@ export async function executeDirectTool(raw: JsonValue, deps: DirectServiceDepen
 			resultContentTypes: [],
 			resultBytes: 0,
 		});
-		throw new Error("Direct Computer Use request did not match a tool schema");
+		throw new Error("Pi Computer Use request did not match a tool schema");
 	}
 
 	const app = request.method === "list_apps" ? undefined : String(request.arguments.app);
@@ -108,7 +108,7 @@ export async function executeDirectTool(raw: JsonValue, deps: DirectServiceDepen
 			signal: deps.signal,
 			timeoutMs: 120_000,
 			onElicitation: deps.onElicitation,
-			supportsOpenAiFormElicitation: deps.supportsOpenAiFormElicitation,
+			supportsOpaqueFormElicitation: deps.supportsOpaqueFormElicitation,
 			configPath: pathConfigFile(stateRoot),
 		});
 		brokerCleanupVerified = broker.brokerCleanupVerified;
@@ -119,7 +119,7 @@ export async function executeDirectTool(raw: JsonValue, deps: DirectServiceDepen
 			brokerCleanupVerified = error.cleanupVerified;
 		}
 		if (deps.signal?.aborted) outcome = "cancelled";
-		failure = error instanceof Error ? error : new Error("Direct Computer Use failed");
+		failure = error instanceof Error ? error : new Error("Pi Computer Use failed");
 	}
 
 	const metadata = broker ? contentMetadata(broker.content) : { types: [], bytes: 0 };
@@ -143,7 +143,7 @@ export async function executeDirectTool(raw: JsonValue, deps: DirectServiceDepen
 	};
 	await appendAudit(stateRoot, audit);
 	if (failure) throw failure;
-	if (!broker) throw new Error("Direct Computer Use ended without a result");
+	if (!broker) throw new Error("Pi Computer Use ended without a result");
 
 	return {
 		isError: broker.isError,
@@ -158,7 +158,7 @@ type DirectStatus = {
 	configPath: string;
 	methods: DirectMethod[];
 } & (
-	| { brokerVerified: true; brokerVersion: string; clientBuild: string; codexPath: string }
+	| { brokerVerified: true; brokerVersion: string; clientBuild: string; appServerPath: string }
 	| { brokerVerified: false; brokerError: string }
 );
 
@@ -170,8 +170,8 @@ export function getDirectStatus(stateRoot = defaultStateRoot()): DirectStatus {
 		methods: [...COMPUTER_USE_METHODS],
 	};
 	try {
-		const { codexPath, brokerVersion, clientBuild } = verifyOfficialDirectBroker({ configPath: status.configPath });
-		return { ...status, brokerVerified: true, codexPath, brokerVersion, clientBuild };
+		const { appServerPath, brokerVersion, clientBuild } = verifyOfficialDirectBroker({ configPath: status.configPath });
+		return { ...status, brokerVerified: true, appServerPath, brokerVersion, clientBuild };
 	} catch (error) {
 		return { ...status, brokerVerified: false, brokerError: error instanceof Error ? error.message : String(error) };
 	}

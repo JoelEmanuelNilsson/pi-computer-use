@@ -1,8 +1,3 @@
-/**
- * Deprecated fallback: the ten typed Computer Use tools from 0.6, for ChatGPT accounts where OpenAI has
- * not turned on the unified cua_repl runtime. ChatGPT itself still uses them there. Remove this file,
- * src/legacy and test/legacy once every supported ChatGPT has the unified runtime.
- */
 import type { ExtensionAPI, ToolNamespace } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import { LegacySessionExecutor } from "../../src/legacy/session-executor.ts";
@@ -19,7 +14,7 @@ const jsonObjectSchema = z.record(z.string(), z.json());
 
 export const COMPUTER_USE_NAMESPACE: ToolNamespace = {
   name: "computer_use",
-  description: "OpenAI's official signed macOS Computer Use. Call get_app_state for an app before acting on it, run known actions in sequence, then call get_app_state again before deciding the next step.",
+  description: "Pi Computer Use for macOS. Call get_app_state for an app before acting on it, run known actions in sequence, then call get_app_state again before deciding the next step.",
   instructions: `Compose these tools in codemode scripts:
 
 const state = await tools.computer_use_get_app_state({ app: "TextEdit" });
@@ -31,7 +26,7 @@ await tools.computer_use_type_text({ app: "TextEdit", text: "hello" });
 get_app_state resolves to { app, text, screenshot }. text is the accessibility tree; after the first inspection it may be a diff, so pass disableDiff: true for a fresh full tree. screenshot is an image block for image(), or null.
 Take element_index values from the latest get_app_state text, and inspect again after acting.
 Calls run one at a time, in the order the script makes them.
-list_apps resolves to the official text inventory. A failed call rejects with the official error text. When the adapter recognises the cause, the error also gives a recovery step; follow it before falling back to other tools, and tell the user if it still fails.`,
+list_apps resolves to the app inventory text. A failed call rejects with the runtime error text. When the cause is recognised, the error also gives a recovery step; follow it before falling back to other tools, and tell the user if it still fails.`,
 };
 
 export function computerUseToolName(method: DirectMethod): string {
@@ -88,7 +83,7 @@ export function registerLegacyComputerUse(
         const response = await session.execute(method, args, {
           stateRoot,
           signal,
-          supportsOpenAiFormElicitation: true,
+          supportsOpaqueFormElicitation: true,
           onElicitation: (request) => handleOfficialElicitation(
             request,
             ctx,
@@ -99,7 +94,7 @@ export function registerLegacyComputerUse(
           .filter((block) => block.type !== "image")
           .map((block) => String(block.text ?? ""))
           .join("\n");
-        if (response.isError) throw new Error(text || "Official Computer Use returned an error");
+        if (response.isError) throw new Error(text || "Pi Computer Use returned an error");
         const rendered = await toPiContent(response.content);
         const details: JsonObject = {};
         if (rendered.fullOutputPath) details.fullOutputPath = rendered.fullOutputPath;

@@ -22,7 +22,7 @@ test("the nested Computer Use server receives only the verified Codex path", asy
 		await writeFile(codex, "signed fixture\n");
 		await symlink(codex, alias);
 		const configPath = path.join(root, "config.json");
-		await writeFile(configPath, JSON.stringify({ codexPath: alias, computerUseAppPath: app }));
+		await writeFile(configPath, JSON.stringify({ appServerPath: alias, computerUseAppPath: app }));
 		process.env.CODEX_CLI_PATH = "/ambient/unverified/codex";
 
 		t.mock.method(childProcess, "spawnSync", (command: string, args: string[]) => {
@@ -54,7 +54,7 @@ test("the nested Computer Use server receives only the verified Codex path", asy
 
 		const status = service.getDirectStatus(root);
 		assert.ok(status.brokerVerified);
-		assert.equal(status.codexPath, codex);
+		assert.equal(status.appServerPath, codex);
 	} finally {
 		t.mock.restoreAll();
 		syncBuiltinESMExports();

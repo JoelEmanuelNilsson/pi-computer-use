@@ -6,7 +6,6 @@ export interface JsonObject {
 	[key: string]: JsonValue | undefined;
 }
 
-/** The official cua_repl tools a caller may invoke. `turn_ended` is sent by the adapter at each turn's end. */
 export const CUA_REPL_TOOLS = ["js", "js_reset"] as const;
 export type CuaReplTool = typeof CUA_REPL_TOOLS[number];
 export type CuaReplArguments = JsonObject;
@@ -63,10 +62,6 @@ const JS_DESCRIPTION = [
 const JS_RESET_DESCRIPTION = "Reset the persistent cua_repl JavaScript session. Discards JavaScript bindings without closing apps or browser tabs.";
 const ANNOTATIONS = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 
-/**
- * Build concise tool definitions whose parameter schemas match official node_repl from ChatGPT's
- * cua_repl environment, without ChatGPT-app-only UI directives.
- */
 export function cuaReplToolDefinitions(env: Record<string, string>): CuaReplToolSet {
 	const overrides = env.NODE_REPL_TOOL_OVERRIDES ? overridesSchema.parse(JSON.parse(env.NODE_REPL_TOOL_OVERRIDES)) : undefined;
 	const completion = env.NODE_REPL_JS_COMPLETION_SUMMARY ? completionSchema.parse(JSON.parse(env.NODE_REPL_JS_COMPLETION_SUMMARY)) : undefined;

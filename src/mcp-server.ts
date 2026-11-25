@@ -105,7 +105,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<
 		return result;
 	} catch (error) {
 		return {
-			content: [{ type: "text", text: error instanceof Error ? error.message : "Direct Computer Use failed" }],
+			content: [{ type: "text", text: error instanceof Error ? error.message : "Pi Computer Use failed" }],
 			isError: true,
 		};
 	}

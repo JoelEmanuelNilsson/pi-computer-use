@@ -47,7 +47,7 @@ test("writes Chrome native host manifest matching ChatGPT's plugin version, stay
 				"chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/",
 				"chrome-extension://odlomjlbamekndcpllcnffbgeohgkmjh/",
 			],
-			description: "ChatGPT browser native messaging host",
+			description: "Pi Computer Use browser native messaging host",
 			name: "com.openai.codexextension",
 			path: v1Binary,
 			type: "stdio",

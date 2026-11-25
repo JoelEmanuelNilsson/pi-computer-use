@@ -11,7 +11,6 @@ import { computerUseToolName } from "../../integrations/pi/legacy.ts";
 import { selectComputerUseRoute } from "../../src/direct-service.ts";
 import { COMPUTER_USE_METHODS } from "../../src/legacy/tools.ts";
 
-/** A state directory whose config names a ChatGPT for which ChatGPT has written no cua_repl settings. */
 async function stateWithoutUnifiedRuntime(root: string): Promise<string> {
 	const app = path.join(root, "ChatGPT.app");
 	await mkdir(path.join(app, "Contents", "Resources"), { recursive: true });
@@ -20,16 +19,16 @@ async function stateWithoutUnifiedRuntime(root: string): Promise<string> {
 	await writeFile(path.join(app, "Contents", "Resources", "codex"), "", { mode: 0o755 });
 	const stateRoot = path.join(root, "state");
 	await mkdir(stateRoot);
-	await writeFile(path.join(stateRoot, "config.json"), JSON.stringify({ codexPath: path.join(app, "Contents", "Resources", "codex") }));
+	await writeFile(path.join(stateRoot, "config.json"), JSON.stringify({ appServerPath: path.join(app, "Contents", "Resources", "codex") }));
 	return stateRoot;
 }
 
-test("a ChatGPT without its unified runtime selects the deprecated typed tools", async () => {
+test("a runtime without its unified config selects the deprecated typed tools", async () => {
 	const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "cu-route-legacy.")));
 	try {
 		const route = selectComputerUseRoute(await stateWithoutUnifiedRuntime(root));
 		assert.equal(route.kind, "legacy");
-		assert.match(route.kind === "legacy" ? route.reason : "", /ChatGPT 0\.0\.1-no-unified-runtime has not prepared its Computer Use runtime/);
+		assert.match(route.kind === "legacy" ? route.reason : "", /The runtime dependency \(0\.0\.1-no-unified-runtime\) has not prepared its Computer Use runtime config/);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

@@ -14,15 +14,9 @@ import type { CuaReplArguments, CuaReplTool } from "./tools.ts";
 
 interface DirectSessionExecutorDependencies {
 	createSession?: typeof createOfficialCuaReplSession;
-	/** End the turn after this long without a call, for clients that never report one ending. */
 	idleTurnEndMs?: number;
 }
 
-/**
- * Keeps one official cua_repl session, so REPL bindings such as app and tab handles persist across
- * calls and turns, as they do in ChatGPT. A transport failure discards the session; the next call
- * starts a fresh one.
- */
 export class DirectSessionExecutor {
 	private queue = Promise.resolve();
 	private session?: OfficialCuaReplSession;
@@ -67,7 +61,7 @@ export class DirectSessionExecutor {
 						}
 						if (directTool === "js_reset") await this.session?.endTurn();
 						this.session ??= await (this.dependencies.createSession ?? createOfficialCuaReplSession)({
-							supportsOpenAiFormElicitation: dependencies.supportsOpenAiFormElicitation === true,
+							supportsOpaqueFormElicitation: dependencies.supportsOpaqueFormElicitation === true,
 							configPath: pathConfigFile(dependencies.stateRoot ?? defaultStateRoot()),
 						});
 						return this.session.call(directTool, args, options);
@@ -95,7 +89,6 @@ export class DirectSessionExecutor {
 		});
 	}
 
-	/** End the current agent turn. The session and its REPL bindings stay for the next turn. */
 	async endTurn(): Promise<void> {
 		await this.runExclusive(async () => {
 			this.clearIdleTimer();

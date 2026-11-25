@@ -83,7 +83,7 @@ export class LegacySessionExecutor {
 						...dependencies,
 						callTool: async (directMethod, args, options) => {
 							this.session = await (this.dependencies.createSession ?? createOfficialDirectToolSession)({
-								supportsOpenAiFormElicitation: dependencies.supportsOpenAiFormElicitation === true,
+								supportsOpaqueFormElicitation: dependencies.supportsOpaqueFormElicitation === true,
 								configPath: pathConfigFile(dependencies.stateRoot ?? defaultStateRoot()),
 							});
 							return this.session.call(directMethod, args, options);

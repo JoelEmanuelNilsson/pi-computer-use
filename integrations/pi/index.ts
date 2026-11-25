@@ -50,7 +50,7 @@ export default function piComputerUse(pi: ExtensionAPI, options: PiComputerUseOp
         const response = await session.execute(tool.name, jsonObjectSchema.parse(params), {
           stateRoot,
           signal,
-          supportsOpenAiFormElicitation: true,
+          supportsOpaqueFormElicitation: true,
           onElicitation: (request) => handleOfficialElicitation(
             request,
             ctx,
@@ -65,7 +65,6 @@ export default function piComputerUse(pi: ExtensionAPI, options: PiComputerUseOp
     });
   }
 
-  // ChatGPT ends a cua_repl turn from its Stop hook; REPL bindings survive into the next turn.
   pi.on("agent_settled", () => session.endTurn());
   pi.on("session_shutdown", () => session.close());
 }

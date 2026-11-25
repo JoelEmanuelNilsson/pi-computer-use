@@ -11,24 +11,24 @@ import type { DirectMethod, DirectToolArguments, JsonObject, JsonValue } from ".
 import { PACKAGE_VERSION } from "../version.ts";
 import { unexpectedLsofStderr } from "../lsof-stderr.ts";
 
-const CODEX_RELATIVE_PATHS = [
+const APP_SERVER_RELATIVE_PATHS = [
 	"Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
 	"Contents/Resources/codex",
 ];
 const COMPUTER_USE_PLUGIN_RELATIVE_PATH = "Contents/Resources/plugins/openai-bundled/plugins/computer-use";
 const COMPUTER_USE_APP_RELATIVE_PATH = "computer-use/Codex Computer Use.app";
 const CLIENT_RELATIVE_PATH = "Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient";
-const CHATGPT_APP_BUNDLE_ID = "com.openai.codex";
-const OPENAI_TEAM_ID = "2DC432GLL2";
-// agent-default (not a user rule): 2026-11-04. codesign can take longer than 10s after updates or under load.
+const RUNTIME_APP_BUNDLE_ID = "com.openai.codex";
+const RUNTIME_SIGNING_TEAM_ID = "2DC432GLL2";
 const VERIFY_COMMAND_TIMEOUT_MS = 30_000;
+const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, "g");
 
-function outOfStepHint(codexVersion?: string): string {
-	const versions = `codex-computer-use-mcp ${PACKAGE_VERSION}${codexVersion ? `, ${codexVersion}` : ""}`;
-	return `ChatGPT and codex-computer-use-mcp may be out of step (${versions}). Open ChatGPT so it can install updates (\`open -a ChatGPT\`), update codex-computer-use-mcp to its latest release, restart Pi or the MCP client, then retry. If it still fails, tell the user.`;
+function outOfStepHint(appServerVersion?: string): string {
+	const versions = `pi-computer-use ${PACKAGE_VERSION}${appServerVersion ? `, ${appServerVersion}` : ""}`;
+	return `Pi Computer Use and its underlying macOS runtime may be out of step (${versions}). Open the ChatGPT desktop app (\`open -a ChatGPT\`) so it can install runtime updates, update pi-computer-use, restart Pi or the MCP client, then retry. If it still fails, tell the user.`;
 }
 
-const STUCK_SERVICE_HINT = "The Computer Use service may be stuck. Restart it with `pkill -f MacOS/SkyComputerUseService` (it relaunches on the next call, with or without ChatGPT running), then retry once. If it fails again, ask the user to relaunch ChatGPT.";
+const STUCK_SERVICE_HINT = "The Pi Computer Use background service may be stuck. Restart it with `pkill -f MacOS/SkyComputerUseService` (it relaunches on the next call), then retry once. If it fails again, ask the user to relaunch the ChatGPT desktop app, which provides the runtime.";
 
 const jsonObjectSchema = z.record(z.string(), z.json());
 const elicitationRequestSchema = z.object({
@@ -79,21 +79,14 @@ export interface DirectBrokerOptions {
 	onElicitation?: (
 		request: DirectBrokerElicitationRequest,
 	) => DirectBrokerElicitationResponse | Promise<DirectBrokerElicitationResponse>;
-	supportsOpenAiFormElicitation?: boolean;
-	/** Test-only executable override. Production callers never set this. */
+	supportsOpaqueFormElicitation?: boolean;
 	appServerCommand?: string;
-	/** Test-only argument override. */
 	appServerArgs?: string[];
-	/** Test-only signature bypass. */
 	skipSignatureVerification?: boolean;
-	/** Test-only client fixture, used only with skipSignatureVerification. */
 	computerUseClient?: OfficialComputerUseClient;
-	/** Test-only process-enumerator override. */
 	processEnumeratorCommand?: string;
-	/** Test-only cwd process-enumerator override. */
 	cwdProcessEnumeratorCommand?: string;
 	onSpawn?: (pid: number) => void;
-	/** Path configuration file; see `readOfficialPathConfig`. */
 	configPath?: string;
 }
 
@@ -153,16 +146,16 @@ function verifySignedBinary(binaryPath: string, runSync: RunSync): void {
 	const name = path.basename(binaryPath);
 	const verify = runSync("/usr/bin/codesign", ["--verify", "--strict", binaryPath]);
 	if (verify.status === null) {
-		throw new BrokerVerificationError(`Could not check the signature of ${name}: codesign did not finish within ${VERIFY_COMMAND_TIMEOUT_MS / 1000} seconds. ChatGPT may be updating, or the Mac is busy. Wait a minute, then retry.`);
+		throw new BrokerVerificationError(`Could not check the signature of ${name}: codesign did not finish within ${VERIFY_COMMAND_TIMEOUT_MS / 1000} seconds. The runtime app may be updating, or the Mac is busy. Wait a minute, then retry.`);
 	}
 	if (verify.status !== 0) {
 		const reason = (verify.stderr ?? "").trim().split("\n")[0].slice(0, 300);
-		throw new BrokerVerificationError(`Signature verification failed for ${name}${reason ? ` (${reason})` : ""}. If ChatGPT is updating, wait for it to finish and retry. Otherwise reinstall ChatGPT from https://chatgpt.com/download.`);
+		throw new BrokerVerificationError(`Signature verification failed for ${name}${reason ? ` (${reason})` : ""}. If the runtime dependency is updating, wait for it to finish and retry. Otherwise reinstall the ChatGPT desktop app (https://chatgpt.com/download), which supplies the signed runtime.`);
 	}
 	const details = runSync("/usr/bin/codesign", ["-dv", "--verbose=2", binaryPath]);
 	const output = `${details.stdout ?? ""}\n${details.stderr ?? ""}`;
-	if (details.status !== 0 || !new RegExp(`(?:^|\\n)TeamIdentifier=${OPENAI_TEAM_ID}(?:\\n|$)`).test(output)) {
-		throw new BrokerVerificationError(`${path.basename(binaryPath)} is not signed by the expected OpenAI team`);
+	if (details.status !== 0 || !new RegExp(`(?:^|\\n)TeamIdentifier=${RUNTIME_SIGNING_TEAM_ID}(?:\\n|$)`).test(output)) {
+		throw new BrokerVerificationError(`${path.basename(binaryPath)} is not signed by the expected Team ID (${RUNTIME_SIGNING_TEAM_ID})`);
 	}
 }
 
@@ -173,7 +166,7 @@ export interface OfficialComputerUseClient {
 }
 
 const pathConfigSchema = z.object({
-	codexPath: z.string().min(1).optional(),
+	appServerPath: z.string().min(1).optional(),
 	computerUseAppPath: z.string().min(1).optional(),
 });
 
@@ -183,51 +176,43 @@ export function pathConfigFile(stateRoot: string): string {
 	return path.join(stateRoot, "config.json");
 }
 
-/** Read optional path overrides. A missing file means the default official locations. */
 export function readOfficialPathConfig(configPath: string): OfficialPathConfig {
 	if (!existsSync(configPath)) return {};
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(readFileSync(configPath, "utf8"));
 	} catch {
-		throw new BrokerVerificationError(`Computer Use config at ${configPath} is not valid JSON`);
+		throw new BrokerVerificationError(`Pi Computer Use config at ${configPath} is not valid JSON`);
 	}
 	const config = pathConfigSchema.safeParse(parsed);
 	if (!config.success) {
-		throw new BrokerVerificationError(`Computer Use config at ${configPath} must set "codexPath" and "computerUseAppPath", when present, to path strings`);
+		throw new BrokerVerificationError(`Pi Computer Use config at ${configPath} must set "appServerPath" and "computerUseAppPath", when present, to path strings`);
 	}
 	return config.data;
 }
 
-function notFoundError(component: string, checked: string[], key: keyof OfficialPathConfig, hint: string, configPath?: string, installedChatGpt?: string): BrokerVerificationError {
-	const where = configPath ? `in ${configPath}` : "in the Computer Use config.json in the state directory";
-	const moved = installedChatGpt ? ` ChatGPT is installed at ${installedChatGpt}; if it is up to date, an update may have moved this file. ${outOfStepHint()}` : "";
+function notFoundError(component: string, checked: string[], key: keyof OfficialPathConfig, hint: string, configPath?: string, installedRuntimeApp?: string): BrokerVerificationError {
+	const where = configPath ? `in ${configPath}` : "in config.json in the Pi Computer Use state directory";
+	const moved = installedRuntimeApp ? ` The runtime app is installed at ${installedRuntimeApp}; if it is up to date, an update may have moved this file. ${outOfStepHint()}` : "";
 	return new BrokerVerificationError(
 		`${component} was not found. Checked: ${checked.join(", ")}. ${hint}${moved} If it is installed elsewhere, set "${key}" to its absolute path ${where}, or remove "${key}" to restore automatic discovery.`,
 	);
 }
 
-function defaultChatGptAppPaths(userHome = os.userInfo().homedir): string[] {
+function defaultRuntimeAppPaths(userHome = os.userInfo().homedir): string[] {
 	return ["/Applications/ChatGPT.app", path.join(userHome, "Applications", "ChatGPT.app")];
 }
 
-/**
- * The default locations first, then any other app Spotlight indexes under ChatGPT's bundle ID, such as
- * an install still named Codex.app because the separate classic ChatGPT app occupies ChatGPT.app.
- */
-function installedChatGptAppPaths(defaultApps: string[], runSync: RunSync): string[] {
-	const indexed = runSync("/usr/bin/mdfind", [`kMDItemCFBundleIdentifier == "${CHATGPT_APP_BUNDLE_ID}"`]);
+function installedRuntimeAppPaths(defaultApps: string[], runSync: RunSync): string[] {
+	const indexed = runSync("/usr/bin/mdfind", [`kMDItemCFBundleIdentifier == "${RUNTIME_APP_BUNDLE_ID}"`]);
 	const indexedApps = indexed.status === 0 ? (indexed.stdout ?? "").split("\n").filter((line) => line.endsWith(".app")) : [];
 	return [...new Set([...defaultApps, ...indexedApps])];
 }
 
 interface ResolveOfficialComputerUseClientOptions {
-	/** Test-only OS-account home override. Production never reads HOME or CODEX_HOME. */
 	userHome?: string;
-	/** Test-only legacy root override. */
 	legacyPluginRoot?: string;
-	/** Test-only override of the default ChatGPT app locations. */
-	chatGptAppPaths?: string[];
+	runtimeAppPaths?: string[];
 	configPath?: string;
 	runSync?: RunSync;
 }
@@ -240,25 +225,24 @@ function checkedCandidate(appPath: string, clientPath: string, layout: OfficialC
 		canonicalApp = realpathSync(appPath);
 		canonicalClient = realpathSync(clientPath);
 	} catch {
-		throw new BrokerVerificationError("Could not resolve the official Computer Use client path");
+		throw new BrokerVerificationError("Could not resolve the Computer Use runtime client path");
 	}
 	if (canonicalApp !== path.resolve(appPath) || canonicalClient !== path.resolve(clientPath) || !canonicalClient.startsWith(`${canonicalApp}${path.sep}`)) {
-		throw new BrokerVerificationError("Official Computer Use client path was not canonical");
+		throw new BrokerVerificationError("Computer Use runtime client path was not canonical");
 	}
 	verifySignedBinary(canonicalClient, runSync);
 	return { appPath: canonicalApp, clientPath: canonicalClient, layout };
 }
 
-/** Resolve the configured client, or else the two reviewed official layouts, preferring ChatGPT's current installed-component contract. */
 export function resolveOfficialComputerUseClient(options: ResolveOfficialComputerUseClientOptions = {}): OfficialComputerUseClient {
 	const runSync = options.runSync ?? productionRunSync;
 	const config = options.configPath ? readOfficialPathConfig(options.configPath) : {};
-	const clientHint = "Install or update the official ChatGPT macOS app (https://chatgpt.com/download), then open it and install its Computer Use component.";
+	const clientHint = "Install or update the ChatGPT macOS app (https://chatgpt.com/download), which provides the signed runtime, then open it and install its Computer Use component.";
 	if (config.computerUseAppPath) {
 		const configuredApp = existsSync(config.computerUseAppPath) ? realpathSync(config.computerUseAppPath) : path.resolve(config.computerUseAppPath);
 		const configured = checkedCandidate(configuredApp, path.join(configuredApp, CLIENT_RELATIVE_PATH), "configured", runSync);
 		if (configured) return configured;
-		throw notFoundError("Official Computer Use client", [path.join(configuredApp, CLIENT_RELATIVE_PATH)], "computerUseAppPath", clientHint, options.configPath);
+		throw notFoundError("Computer Use runtime client", [path.join(configuredApp, CLIENT_RELATIVE_PATH)], "computerUseAppPath", clientHint, options.configPath);
 	}
 	const userHome = options.userHome ?? os.userInfo().homedir;
 	const canonicalUserHome = existsSync(userHome) ? realpathSync(userHome) : path.resolve(userHome);
@@ -267,9 +251,9 @@ export function resolveOfficialComputerUseClient(options: ResolveOfficialCompute
 	if (current) return current;
 
 	const checked = [path.join(currentApp, CLIENT_RELATIVE_PATH)];
-	const chatGptApps = installedChatGptAppPaths(options.chatGptAppPaths ?? defaultChatGptAppPaths(userHome), runSync);
+	const runtimeApps = installedRuntimeAppPaths(options.runtimeAppPaths ?? defaultRuntimeAppPaths(userHome), runSync);
 	const legacyRoots = options.legacyPluginRoot ? [options.legacyPluginRoot]
-		: chatGptApps.map((app) => path.join(app, COMPUTER_USE_PLUGIN_RELATIVE_PATH));
+		: runtimeApps.map((app) => path.join(app, COMPUTER_USE_PLUGIN_RELATIVE_PATH));
 	for (const legacyRoot of legacyRoots) {
 		const canonicalLegacyRoot = existsSync(legacyRoot) ? realpathSync(legacyRoot) : path.resolve(legacyRoot);
 		const legacyApp = path.join(canonicalLegacyRoot, "Codex Computer Use.app");
@@ -279,58 +263,57 @@ export function resolveOfficialComputerUseClient(options: ResolveOfficialCompute
 		if (legacy) return legacy;
 	}
 	throw notFoundError(
-		"Official Computer Use client",
+		"Computer Use runtime client",
 		checked,
 		"computerUseAppPath",
 		clientHint,
 		options.configPath,
-		chatGptApps.find((app) => existsSync(app)),
+		runtimeApps.find((app) => existsSync(app)),
 	);
 }
 
-/** Resolve the configured Codex app-server executable, or else the first default ChatGPT location that exists. */
-export function resolveOfficialCodex(options: ResolveOfficialComputerUseClientOptions = {}): string {
+export function resolveRuntimeAppServer(options: ResolveOfficialComputerUseClientOptions = {}): string {
 	const runSync = options.runSync ?? productionRunSync;
 	const config = options.configPath ? readOfficialPathConfig(options.configPath) : {};
-	const chatGptApps = config.codexPath ? [] : installedChatGptAppPaths(options.chatGptAppPaths ?? defaultChatGptAppPaths(options.userHome), runSync);
-	const candidates = config.codexPath ? [path.resolve(config.codexPath)]
-		: chatGptApps.flatMap((app) => CODEX_RELATIVE_PATHS.map((relative) => path.join(app, relative)));
+	const runtimeApps = config.appServerPath ? [] : installedRuntimeAppPaths(options.runtimeAppPaths ?? defaultRuntimeAppPaths(options.userHome), runSync);
+	const candidates = config.appServerPath ? [path.resolve(config.appServerPath)]
+		: runtimeApps.flatMap((app) => APP_SERVER_RELATIVE_PATHS.map((relative) => path.join(app, relative)));
 	const found = candidates.find((candidate) => existsSync(candidate));
 	if (!found) {
 		throw notFoundError(
-			"Codex app-server",
+			"Computer Use runtime app-server",
 			candidates,
-			"codexPath",
-			"Install or update the official ChatGPT macOS app (https://chatgpt.com/download), then open it.",
+			"appServerPath",
+			"Install or update the ChatGPT macOS app (https://chatgpt.com/download), which provides the signed runtime, then open it.",
 			options.configPath,
-			chatGptApps.find((app) => existsSync(app)),
+			runtimeApps.find((app) => existsSync(app)),
 		);
 	}
-	const codexPath = realpathSync(found);
-	verifySignedBinary(codexPath, runSync);
-	return codexPath;
+	const appServerPath = realpathSync(found);
+	verifySignedBinary(appServerPath, runSync);
+	return appServerPath;
 }
 
 export function verifyOfficialDirectBroker(options: ResolveOfficialComputerUseClientOptions = {}) {
 	const runSync = options.runSync ?? productionRunSync;
-	const codexPath = resolveOfficialCodex({ ...options, runSync });
+	const appServerPath = resolveRuntimeAppServer({ ...options, runSync });
 	const client = resolveOfficialComputerUseClient({ ...options, runSync });
-	const version = runSync(codexPath, ["--version"]);
+	const version = runSync(appServerPath, ["--version"]);
 	if (version.status !== 0 || !/^codex-cli\s+\d+\./.test((version.stdout ?? "").trim())) {
-		throw new BrokerVerificationError("Could not verify the app-bundled Codex app-server version");
+		throw new BrokerVerificationError("Could not verify the Computer Use runtime app-server version");
 	}
 	const build = runSync("/usr/bin/plutil", ["-extract", "CFBundleVersion", "raw", path.join(client.appPath, "Contents", "Info.plist")]);
 	const clientBuild = (build.stdout ?? "").trim();
 	if (build.status !== 0 || !clientBuild) {
-		throw new BrokerVerificationError("Could not verify the official Computer Use client build");
+		throw new BrokerVerificationError("Could not verify the Computer Use runtime client build");
 	}
-	return { brokerVersion: (version.stdout ?? "").trim(), clientBuild, client, codexPath };
+	return { brokerVersion: (version.stdout ?? "").trim(), clientBuild, client, appServerPath };
 }
 
-function buildBrokerEnv(codexHome: string, tempRoot: string): NodeJS.ProcessEnv {
+function buildBrokerEnv(runtimeHome: string, tempRoot: string): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = {
 		HOME: tempRoot,
-		CODEX_HOME: codexHome,
+		CODEX_HOME: runtimeHome,
 		PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
 		TMPDIR: tempRoot,
 		NO_COLOR: "1",
@@ -344,7 +327,7 @@ function buildBrokerEnv(codexHome: string, tempRoot: string): NodeJS.ProcessEnv 
 
 function normalizeBrokerError(error: Error, stderr: string): Error {
 	return /authentication|bearer|token/i.test(`${error.message}\n${stderr}`)
-		? new Error("Official direct Computer Use broker reported an authentication failure", { cause: error })
+		? new Error("Pi Computer Use broker reported an authentication failure", { cause: error })
 		: error;
 }
 
@@ -464,9 +447,9 @@ async function terminateGroup(
 		try {
 			proc.kill("SIGSTOP");
 			rootFrozen = processExists(pid);
-		} catch { /* already exited */ }
+		} catch {}
 	}
-	if (rootWasAlive && !rootFrozen) cleanupError ??= new Error("Could not freeze the official app-server before cleanup");
+	if (rootWasAlive && !rootFrozen) cleanupError ??= new Error("Could not freeze the Pi Computer Use app-server before cleanup");
 
 	let stable = false;
 	for (let pass = 0; pass < 16; pass += 1) {
@@ -482,17 +465,17 @@ async function terminateGroup(
 		if (!added && pass > 0) { stable = true; break; }
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
-	if (!stable) cleanupError ??= new Error("Official app-server process tree did not stabilize for cleanup");
+	if (!stable) cleanupError ??= new Error("Pi Computer Use app-server process tree did not stabilize for cleanup");
 
 	for (const child of descendants) {
-		try { process.kill(child, "SIGKILL"); } catch { /* exited */ }
+		try { process.kill(child, "SIGKILL"); } catch {}
 	}
-	try { process.kill(-pid, "SIGKILL"); } catch { try { proc.kill("SIGKILL"); } catch { /* exited */ } }
+	try { process.kill(-pid, "SIGKILL"); } catch { try { proc.kill("SIGKILL"); } catch {} }
 	for (let pass = 0; pass < 2; pass += 1) {
 		await new Promise((resolve) => setTimeout(resolve, 25));
 		for (const owned of enumerate()) {
 			descendants.add(owned);
-			try { process.kill(owned, "SIGKILL"); } catch { /* exited */ }
+			try { process.kill(owned, "SIGKILL"); } catch {}
 		}
 	}
 	for (let elapsed = 0; elapsed < 1500; elapsed += 25) {
@@ -503,10 +486,10 @@ async function terminateGroup(
 	try { cwdSurvivors = collectProcessesWithCwd(workDir, cwdProcessEnumeratorCommand); }
 	catch (error) { cleanupError ??= error instanceof Error ? error : new Error(String(error)); }
 	for (const survivor of cwdSurvivors) {
-		try { process.kill(survivor, "SIGKILL"); } catch { /* exited */ }
+		try { process.kill(survivor, "SIGKILL"); } catch {}
 	}
 	if (processGroupExists(pid) || [...descendants, ...cwdSurvivors].some((child) => processExists(child))) {
-		cleanupError ??= new Error("Official app-server process tree did not terminate");
+		cleanupError ??= new Error("Pi Computer Use app-server process tree did not terminate");
 	}
 	if (cleanupError) throw cleanupError;
 }
@@ -524,15 +507,15 @@ export async function createOfficialDirectToolSession(
 	options: DirectBrokerOptions = {},
 ): Promise<OfficialDirectToolSession> {
 	const verification = options.skipSignatureVerification
-		? { brokerVersion: "test-app-server", clientBuild: "test-client", client: options.computerUseClient, codexPath: undefined }
+		? { brokerVersion: "test-app-server", clientBuild: "test-client", client: options.computerUseClient, appServerPath: undefined }
 		: verifyOfficialDirectBroker({ configPath: options.configPath });
-	const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pi-direct-computer-use."));
-	const codexHome = path.join(tempRoot, "codex-home");
+	const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pi-computer-use."));
+	const runtimeHome = path.join(tempRoot, "runtime-home");
 	const workDir = path.join(tempRoot, "work");
-	await mkdir(codexHome, { mode: 0o700 });
+	await mkdir(runtimeHome, { mode: 0o700 });
 	await mkdir(workDir, { mode: 0o700 });
-	await writeFile(path.join(codexHome, "config.toml"), "", { mode: 0o600 });
-	await chmod(codexHome, 0o700);
+	await writeFile(path.join(runtimeHome, "config.toml"), "", { mode: 0o600 });
+	await chmod(runtimeHome, 0o700);
 
 	let proc: ChildProcessWithoutNullStreams | undefined;
 	let processClosed: Promise<void> | undefined;
@@ -572,11 +555,10 @@ export async function createOfficialDirectToolSession(
 	const cancel = (error: Error): void => {
 		fatalError ??= error;
 		rejectAll(fatalError);
-		// Cancellation and tool timeouts leave the signed transport usable.
 		void close().catch(() => undefined);
 	};
 	const send = (message: JsonValue): void => {
-		if (!proc?.stdin.writable) throw new Error("Official app-server stdin is unavailable");
+		if (!proc?.stdin.writable) throw new Error("Pi Computer Use app-server stdin is unavailable");
 		proc.stdin.write(`${JSON.stringify(message)}\n`, "utf8");
 	};
 	const request = (methodName: string, params: JsonValue, timeoutMs: number, cleanup = false): Promise<JsonValue> => {
@@ -593,10 +575,9 @@ export async function createOfficialDirectToolSession(
 				const recovery = methodName === "mcpServer/tool/call"
 					? `The target app may be unresponsive. ${STUCK_SERVICE_HINT}`
 					: `Retry once. If it times out again: ${outOfStepHint(verification.brokerVersion)}`;
-				const error = new Error(`Official app-server request timed out: ${methodName}. ${recovery}`);
+				const error = new Error(`Pi Computer Use app-server request timed out: ${methodName}. ${recovery}`);
 				reject(error);
 				if (methodName === "mcpServer/tool/call") cancel(error);
-				// A stalled cursor cleanup must not fail the session; teardown follows.
 				else if (!cleanup) fail(error);
 			}, timeoutMs);
 			pending.set(id, { resolve, reject, timer });
@@ -621,26 +602,19 @@ export async function createOfficialDirectToolSession(
 	const close = (): Promise<void> => {
 		closePromise ??= (async () => {
 			closed = true;
-			rejectAll(new Error("Official app-server closed"));
+			rejectAll(new Error("Pi Computer Use app-server closed"));
 			const client = verification.client;
 			if (toolCallAttempted && client && !termination) {
 				try {
-					if (!proc?.stdin.writable) throw new Error("Official app-server transport is unavailable before turn cleanup");
-					// A rejected caller is not a completed native request. Ending its
-					// turn too early can let the late request recreate the cursor.
+					if (!proc?.stdin.writable) throw new Error("Pi Computer Use app-server transport is unavailable before turn cleanup");
 					if (!await drainToolResponse(1_000)) throw new Error("Native Computer Use request did not settle before teardown");
-					if (termination) throw fatalError ?? new Error("Official app-server transport failed during teardown");
+					if (termination) throw fatalError ?? new Error("Pi Computer Use app-server transport failed during teardown");
 					let componentHome = path.dirname(path.dirname(client.appPath));
 					if (path.join(componentHome, COMPUTER_USE_APP_RELATIVE_PATH) !== client.appPath) {
-						// Configured apps may live outside the native resolver layout.
-						// Expose the already verified bundle through a private resolver home.
 						componentHome = path.join(tempRoot, "turn-cleanup-home");
 						await mkdir(path.join(componentHome, "computer-use"), { recursive: true, mode: 0o700 });
 						await symlink(client.appPath, path.join(componentHome, COMPUTER_USE_APP_RELATIVE_PATH));
 					}
-					// Use the signed parent's zero-turn command API: a direct Node child
-					// lacks the native sender identity. Only this command needs the real
-					// component location; the broker keeps its isolated CODEX_HOME.
 					const result = z.object({ exitCode: z.number().int() }).parse(await request("command/exec", {
 						command: [client.clientPath, "turn-ended", JSON.stringify({
 							type: "agent-turn-complete", "thread-id": threadId, "turn-id": turnId,
@@ -650,19 +624,15 @@ export async function createOfficialDirectToolSession(
 						sandboxPolicy: { type: "dangerFullAccess" },
 						timeoutMs: 2_000,
 					}, 3_000, true));
-					if (result.exitCode !== 0) throw new Error(`Official turn-ended notification exited with code ${result.exitCode}`);
-				} catch {
-					// Best effort: the native request already ran, so its result stands. Failing
-					// here could make a caller repeat a completed UI action; at worst the shared
-					// service keeps showing this session's cursor.
-				}
+					if (result.exitCode !== 0) throw new Error(`Turn-ended notification exited with code ${result.exitCode}`);
+				} catch {}
 			}
 			let cleanupError: Error | undefined;
 			try {
 				await ensureTerminated();
 				if (processClosed) {
 					await new Promise<void>((resolve, reject) => {
-						const timer = setTimeout(() => reject(new Error("Official app-server stdio did not close")), 1_000);
+						const timer = setTimeout(() => reject(new Error("Pi Computer Use app-server stdio did not close")), 1_000);
 						processClosed!.then(() => { clearTimeout(timer); resolve(); });
 					});
 				}
@@ -671,19 +641,19 @@ export async function createOfficialDirectToolSession(
 			} catch (error) {
 				cleanupError = error instanceof Error ? error : new Error(String(error));
 			}
-			if (cleanupError) throw new Error("Official direct Computer Use broker cleanup failed", { cause: cleanupError });
+			if (cleanupError) throw new Error("Pi Computer Use broker cleanup failed", { cause: cleanupError });
 			if (fatalError || modelTurnsStarted !== 0) throw fatalError ?? new BrokerVerificationError("Model-turn activity was observed during broker teardown");
 		})();
 		return closePromise;
 	};
 
 	try {
-		const command = options.appServerCommand ?? verification.codexPath;
-		if (!command) throw new BrokerVerificationError("The Codex app-server was not verified");
+		const command = options.appServerCommand ?? verification.appServerPath;
+		if (!command) throw new BrokerVerificationError("The Computer Use runtime app-server was not verified");
 		let commandArgs = options.appServerArgs;
 		if (!commandArgs) {
-			assert(verification.client && verification.codexPath, "Test brokers must supply appServerArgs");
-			const mcpTable = `{"computer-use" = { command = ${JSON.stringify(verification.client.clientPath)}, args = ["mcp"], cwd = ${JSON.stringify(workDir)}, enabled = true, startup_timeout_sec = 30, tool_timeout_sec = 120, env = { CODEX_CLI_PATH = ${JSON.stringify(verification.codexPath)} } }}`;
+			assert(verification.client && verification.appServerPath, "Test brokers must supply appServerArgs");
+			const mcpTable = `{"computer-use" = { command = ${JSON.stringify(verification.client.clientPath)}, args = ["mcp"], cwd = ${JSON.stringify(workDir)}, enabled = true, startup_timeout_sec = 30, tool_timeout_sec = 120, env = { CODEX_CLI_PATH = ${JSON.stringify(verification.appServerPath)} } }}`;
 			const disabledProvider = '{ name = "Direct dispatch disabled provider", base_url = "http://127.0.0.1:9/v1", wire_api = "responses", request_max_retries = 0, stream_max_retries = 0, supports_websockets = false, requires_openai_auth = false }';
 			commandArgs = [
 				"-c", 'model_provider="direct_disabled"',
@@ -713,7 +683,7 @@ export async function createOfficialDirectToolSession(
 			detached: true,
 			shell: false,
 			stdio: ["pipe", "pipe", "pipe"],
-			env: buildBrokerEnv(codexHome, tempRoot),
+			env: buildBrokerEnv(runtimeHome, tempRoot),
 		});
 		const spawnedProcess = proc;
 		processClosed = new Promise((resolve) => spawnedProcess.once("close", () => resolve()));
@@ -724,28 +694,25 @@ export async function createOfficialDirectToolSession(
 		proc.once("error", (error) => fail(error));
 		proc.once("close", (code) => {
 			if (pending.size === 0) return;
-			// eslint-disable-next-line no-control-regex
-			const output = stderr.replace(/\u001b\[[0-9;]*m/g, "").trim().split("\n").slice(-6).join("\n").slice(-1_000);
-			fail(new Error(`Official app-server exited before completing the request (${code ?? "unknown"})${output ? `. It reported:\n${output}\n` : ". "}${outOfStepHint(verification.brokerVersion)}`));
+			const output = stderr.replace(ANSI_ESCAPE_PATTERN, "").trim().split("\n").slice(-6).join("\n").slice(-1_000);
+			fail(new Error(`Pi Computer Use app-server exited before completing the request (${code ?? "unknown"})${output ? `. It reported:\n${output}\n` : ". "}${outOfStepHint(verification.brokerVersion)}`));
 		});
 
 		const processProtocolLine = (line: string): void => {
 			let parsedMessage: ReturnType<typeof protocolMessageSchema.safeParse>;
 			try { parsedMessage = protocolMessageSchema.safeParse(JSON.parse(line)); }
-			catch { fail(new Error("Official app-server emitted malformed JSONL")); return; }
-			if (!parsedMessage.success) { fail(new Error("Official app-server emitted an invalid protocol message")); return; }
+			catch { fail(new Error("Pi Computer Use app-server emitted malformed JSONL")); return; }
+			if (!parsedMessage.success) { fail(new Error("Pi Computer Use app-server emitted an invalid protocol message")); return; }
 			const message = parsedMessage.data;
 			if (message.method?.startsWith("turn/") || message.method?.startsWith("item/")) {
 				modelTurnsStarted += 1;
-				fail(new Error("Official app-server unexpectedly emitted model-turn activity during direct dispatch"));
+				fail(new Error("Pi Computer Use app-server unexpectedly emitted model-turn activity during direct dispatch"));
 				return;
 			}
 			if (toolResponse?.id === String(message.id) && (message.result !== undefined || message.error !== undefined)) {
 				toolResponse.finish();
 				toolResponse = undefined;
 			}
-			// After shutdown starts, only its own reply may complete. Continue
-			// detecting malformed output and model activity before this filter.
 			if ((fatalError || closed) && String(message.id) !== cleanupRequestId) return;
 			try {
 				if (message.id != null && (message.result !== undefined || message.error !== undefined)) {
@@ -753,7 +720,7 @@ export async function createOfficialDirectToolSession(
 					if (!waiter) return;
 					pending.delete(String(message.id));
 					clearTimeout(waiter.timer);
-					if (message.error) waiter.reject(new Error(`Official app-server error: ${message.error.message ?? "unknown"}. ${outOfStepHint(verification.brokerVersion)}`));
+					if (message.error) waiter.reject(new Error(`Pi Computer Use app-server error: ${message.error.message ?? "unknown"}. ${outOfStepHint(verification.brokerVersion)}`));
 					else waiter.resolve(message.result ?? null);
 					return;
 				}
@@ -779,12 +746,12 @@ export async function createOfficialDirectToolSession(
 		stdoutLines.on("line", processProtocolLine);
 
 		await request("initialize", {
-			clientInfo: { name: "pi_direct_computer_use", title: "Pi Direct Computer Use", version: PACKAGE_VERSION },
-			capabilities: { mcpServerOpenaiFormElicitation: options.supportsOpenAiFormElicitation === true },
+			clientInfo: { name: "pi_computer_use", title: "Pi Computer Use", version: PACKAGE_VERSION },
+			capabilities: { mcpServerOpenaiFormElicitation: options.supportsOpaqueFormElicitation === true },
 		}, 15_000);
 		send({ method: "initialized" });
 		const started = threadStartSchema.parse(await request("thread/start", {
-			cwd: workDir, approvalPolicy: "never", sandbox: "danger-full-access", ephemeral: true, serviceName: "pi_direct_computer_use",
+			cwd: workDir, approvalPolicy: "never", sandbox: "danger-full-access", ephemeral: true, serviceName: "pi_computer_use",
 		}, 30_000));
 		threadId = started.thread.id;
 		ephemeralThread = true;
@@ -793,7 +760,7 @@ export async function createOfficialDirectToolSession(
 		try { await close(); }
 		catch (closeError) {
 			const closeFailure = closeError instanceof Error ? closeError : new Error(String(closeError));
-			if (closeFailure.message === "Official direct Computer Use broker cleanup failed") {
+			if (closeFailure.message === "Pi Computer Use broker cleanup failed") {
 				throw new DirectBrokerCallError(closeFailure.message, false, primary);
 			}
 		}
@@ -802,8 +769,8 @@ export async function createOfficialDirectToolSession(
 
 	return {
 		async call(method, args, callOptions = {}) {
-			if (closed) throw new DirectBrokerCallError("Official direct Computer Use session is closed", true);
-			if (callActive) throw new DirectBrokerCallError("Official direct Computer Use session does not allow concurrent calls", false);
+			if (closed) throw new DirectBrokerCallError("Pi Computer Use session is closed", true);
+			if (callActive) throw new DirectBrokerCallError("Pi Computer Use session does not allow concurrent calls", false);
 			callActive = true;
 			currentElicitation = callOptions.onElicitation;
 			currentElicitationCount = 0;
@@ -811,7 +778,7 @@ export async function createOfficialDirectToolSession(
 			let abortHandler: (() => void) | undefined;
 			try {
 				if (callOptions.signal) {
-					abortHandler = () => cancel(new Error("Direct Computer Use request cancelled"));
+					abortHandler = () => cancel(new Error("Pi Computer Use request cancelled"));
 					if (callOptions.signal.aborted) abortHandler();
 					else callOptions.signal.addEventListener("abort", abortHandler, { once: true });
 				}
@@ -877,7 +844,7 @@ export async function callOfficialDirectTool(
 		}
 	} catch (cleanupError) {
 		const closeFailure = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
-		if (closeFailure.message !== "Official direct Computer Use broker cleanup failed") {
+		if (closeFailure.message !== "Pi Computer Use broker cleanup failed") {
 			throw new DirectBrokerCallError(closeFailure.message, true, closeFailure, failure instanceof DirectBrokerCallError ? failure : {});
 		}
 		throw new DirectBrokerCallError(closeFailure.message, false, closeFailure, failure instanceof DirectBrokerCallError ? failure : {});
@@ -888,6 +855,6 @@ export async function callOfficialDirectTool(
 		}
 		throw failure;
 	}
-	if (!result) throw new DirectBrokerCallError("Official direct Computer Use ended without a result", cleanupVerified);
+	if (!result) throw new DirectBrokerCallError("Pi Computer Use ended without a result", cleanupVerified);
 	return { ...result, brokerCleanupVerified: true };
 }

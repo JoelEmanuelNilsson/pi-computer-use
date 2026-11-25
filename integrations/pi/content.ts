@@ -33,7 +33,7 @@ export async function toPiContent(content: JsonObject[]): Promise<PiContentResul
   const tempDir = await mkdtemp(path.join(tmpdir(), "pi-computer-use-"));
   const fullOutputPath = path.join(tempDir, "output.txt");
   await writeFile(fullOutputPath, fullText, { encoding: "utf8", mode: 0o600 });
-  const suffix = `\n\n[Official Computer Use text truncated: showing ${aggregate.outputLines} of ${aggregate.totalLines} lines (${formatSize(aggregate.outputBytes)} of ${formatSize(aggregate.totalBytes)}). Full output saved to: ${fullOutputPath}]`;
+  const suffix = `\n\n[Pi Computer Use output truncated: showing ${aggregate.outputLines} of ${aggregate.totalLines} lines (${formatSize(aggregate.outputBytes)} of ${formatSize(aggregate.totalBytes)}). Full output saved to: ${fullOutputPath}]`;
   const result: PiContentResult = { content: [], fullOutputPath };
   let textIndex = 0;
   let textOffset = 0;
@@ -75,7 +75,7 @@ export async function handleOfficialElicitation(
   openUrl: (url: string) => Promise<boolean>,
 ): Promise<DirectBrokerElicitationResponse> {
   if (!ctx.hasUI) return { action: "cancel" };
-  const message = request.message ?? "Official Computer Use requests input";
+  const message = request.message ?? "Pi Computer Use requests input";
 
   if (request.mode === "url") {
     if (!request.url) return { action: "cancel" };
@@ -83,18 +83,18 @@ export async function handleOfficialElicitation(
     if (choice === "Decline") return { action: "decline" };
     if (choice !== "Open URL") return { action: "cancel" };
     if (!await openUrl(request.url)) {
-      ctx.ui.notify("Could not open the official Computer Use URL.", "error");
+      ctx.ui.notify("Could not open the Pi Computer Use URL.", "error");
       return { action: "cancel" };
     }
     return { action: "accept" };
   }
 
   if (request.mode !== undefined && request.mode !== "form" && request.mode !== "openai/form") {
-    ctx.ui.notify(`Official Computer Use sent an unsupported elicitation mode: ${request.mode}`, "warning");
+    ctx.ui.notify(`Pi Computer Use sent an unsupported elicitation mode: ${request.mode}`, "warning");
     return { action: "cancel" };
   }
-  const openAiForm = request.mode === "openai/form";
-  if (request.requestedSchema === undefined || (!openAiForm && !jsonObjectSchema.safeParse(request.requestedSchema).success)) {
+  const isOpaqueForm = request.mode === "openai/form";
+  if (request.requestedSchema === undefined || (!isOpaqueForm && !jsonObjectSchema.safeParse(request.requestedSchema).success)) {
     return { action: "cancel" };
   }
   const choice = await ctx.ui.select(message, ["Respond", "Decline", "Cancel"]);
@@ -108,7 +108,7 @@ export async function handleOfficialElicitation(
     prefill = edited;
     try {
       const parsed = JSON.parse(edited);
-      const content = openAiForm ? parsed : jsonObjectSchema.parse(parsed);
+      const content = isOpaqueForm ? parsed : jsonObjectSchema.parse(parsed);
       return { action: "accept", content };
     } catch (error) {
       ctx.ui.notify(error instanceof Error ? error.message : "Response must be valid JSON", "error");
