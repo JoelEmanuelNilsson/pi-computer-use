@@ -1,42 +1,38 @@
-# Codex Computer Use MCP
+# Pi Computer Use
 
-Give Pi and MCP clients OpenAI's official signed macOS Computer Use runtime, `cua_repl`: the same JavaScript tool that ChatGPT's own threads use to operate Mac apps and browsers. The calling agent writes each script. This package runs no nested model and generates no action plan.
-
-OpenAI does not produce or endorse this independent project. It relies on an experimental app-server API and installed ChatGPT components that may change.
+Pi Computer Use gives Pi and MCP clients native macOS desktop and Google Chrome automation through persistent JavaScript `cua_repl` sessions. The calling agent writes every script. This package runs no nested model and generates no action plan.
 
 ## Requirements
 
 - macOS with an unlocked user session
 - Node.js 22 or newer
-- the official ChatGPT macOS app with its unified Computer Use plugin (tested with ChatGPT for Work 26.1029.61003), by default at `/Applications/ChatGPT.app`
-- ChatGPT opened at least once since its last update, so it has written its Computer Use runtime settings. ChatGPT writes them only when OpenAI has turned on its unified Computer Use runtime for the account; without them, the adapter falls back to the older typed tools (see [Accounts without the unified runtime](#accounts-without-the-unified-runtime-deprecated))
-- the Computer Use component installed by ChatGPT, by default under `~/.codex/computer-use/`
 - Pi 0.99.0 or newer when using the Pi integration
+- The signed macOS runtime dependency supplied by the ChatGPT macOS app, installed by default at `/Applications/ChatGPT.app`, opened at least once since its last update so it writes its runtime config, with its Computer Use component under `~/.codex/computer-use/`
 
-macOS Screen Recording, Accessibility and TCC controls still apply.
+macOS Screen Recording, Accessibility, and TCC permissions still apply.
 
-## Pi
+## Pi integration
 
-Install from npm:
+Install from a local checkout or package source, then run `/reload` in Pi after updates.
 
 ```bash
-pi install npm:codex-computer-use-mcp
+npm ci
+npm run build
+pi -ne -e /absolute/path/to/computer-use/integrations/pi/index.ts
 ```
 
-After `pi update`, run `/reload` to load the new version.
+The extension registers two deferred Pi tools:
 
-The extension registers two ordinary Pi tools:
+- `cua_repl` runs JavaScript in a persistent session with a `cua` object for native macOS apps and Google Chrome tabs.
+- `cua_repl_reset` discards JavaScript bindings in the session without closing apps or browser tabs.
 
-- `cua_repl` is the official `js` tool. It runs JavaScript in a persistent official runtime with a `cua` object for apps and browser tabs.
-- `cua_repl_reset` is the official `js_reset` tool. It discards the runtime's JavaScript bindings.
-
-Their descriptions and parameters are the ones ChatGPT's installed runtime gives its own model, read from ChatGPT when the extension loads. They explain the API, so an agent can start with:
+An agent starts by calling one entry point, such as:
 
 ```js
 let app = await cua.getApp("TextEdit");
 ```
 
-The result includes the app's accessibility tree and the API documentation. Later calls reuse the binding:
+The first result includes the API reference and the app's accessibility tree. Later calls reuse the binding:
 
 ```js
 await app.click(7);
@@ -44,109 +40,93 @@ await app.typeText("hello");
 await app.getAXState();
 ```
 
-Bindings such as `app` last across calls and agent turns until `cua_repl_reset`, a transport failure or the end of the Pi session. When the agent settles, the extension sends the official `turn_ended` notification, as ChatGPT does when its turn stops, so the service can clear that turn's software cursor.
+Bindings persist across tool calls and turns until `cua_repl_reset`, a transport failure, or session shutdown. When the agent settles, the extension sends `turn_ended` so the background service clears its cursor and stops screen capture.
 
-The runtime also drives browsers ChatGPT can reach, such as Chrome through ChatGPT's Chrome extension. `cua.listTabs()` lists your tabs, and `cua.createBrowserTab("chrome", url, { sessionName })` opens one for the agent, which can read it, act in it and close it. Inside ChatGPT each turn needs ChatGPT's browser access grant. This adapter starts the runtime without ChatGPT's grant host, so browser use needs no grant.
+For Chrome automation, `cua.listTabs()` lists open tabs and `cua.createBrowserTab("chrome", url, { sessionName })` opens a new tab. The adapter starts `node_repl` directly without `--require-browser-access` and keeps Chrome's `com.openai.codexextension.json` native messaging host manifest pointed at the verified plugin host binary.
 
-A failed call returns the official error text as an error result, followed by a recovery step when the adapter recognises the cause (see [Failures](#failures)). Pi limits returned text to 50KB or 2,000 lines. When text exceeds that limit, the complete text is written to a mode-0600 file in a private directory under `/tmp`. Images are returned directly and are never spilled to disk.
+Pi truncates oversized text output at 50KB or 2,000 lines and writes the complete text to a mode-0600 file in a private `/tmp` directory. Images return directly and never spill to disk.
 
-Use `/computer-use-status` to inspect the installed components and transport status.
+Run `/computer-use-status` in Pi to inspect the active route, verified paths, and any configuration error.
 
-### Upgrading from 0.6
+### Legacy fallback (deprecated)
 
-Version 0.7.0 replaces the ten `computer_use_<method>` codemode tools with `cua_repl` wherever ChatGPT has its unified runtime. Scripts that called `tools.computer_use_get_app_state({ app })` and similar tools now call the `cua` API inside `cua_repl`: `cua.getApp(app)`, `app.getAXState()`, `app.click(index or [x, y])`, `app.typeText(text)`, `app.pressKey(key)` and so on. The official tool description lists every method.
+If the installed runtime dependency has not written its unified `cua_repl` config, the extension falls back to ten deprecated typed tools (`computer_use_<method>` codemode tools in Pi and `<method>` tools over MCP). Status reports `"route": "legacy"` and the reason. Browser automation requires the unified `cua_repl` route. Run `/reload` in Pi or restart the MCP server once the unified runtime config is present.
 
-### Accounts without the unified runtime (deprecated)
+## MCP server
 
-OpenAI turns on ChatGPT's unified Computer Use runtime per account. Where it is off, ChatGPT itself still uses the ten older typed tools, and so does this adapter: when Pi loads the extension or the MCP server starts, and ChatGPT has not written its `cua_repl` settings, the adapter registers the 0.6 tools instead (`computer_use_<method>` codemode tools in Pi, `<method>` tools over MCP). Status reports `"route": "legacy"` and why. Browser control needs the unified runtime.
-
-This fallback is deprecated and is likely to be removed once the unified runtime reaches every account. If OpenAI turns it on later, `/reload` in Pi or restart the MCP server to switch to `cua_repl`.
-
-To run a source checkout:
+Running `pi-computer-use` starts a stdio MCP server exposing `js`, `js_reset`, and `computer_use_status`:
 
 ```bash
-npm ci
-npm run build
-pi -ne -e /absolute/path/to/codex-computer-use-mcp/integrations/pi/index.ts
+npx pi-computer-use
+pi-computer-use --status
 ```
 
-## MCP
-
-Running the package binary starts a stdio MCP server with the official `js` and `js_reset` tools and `computer_use_status`:
-
-```bash
-npx codex-computer-use-mcp
-```
-
-Example Pi MCP configuration:
+Example MCP configuration:
 
 ```json
 {
-  "mcpServers": {
-    "computer-use": {
-      "command": "npx",
-      "args": ["codex-computer-use-mcp"],
-      "lifecycle": "lazy",
-      "requestTimeoutMs": 180000,
-      "directTools": false
-    }
-  }
+	"mcpServers": {
+		"computer-use": {
+			"command": "npx",
+			"args": ["pi-computer-use"],
+			"lifecycle": "lazy",
+			"requestTimeoutMs": 180000,
+			"directTools": false
+		}
+	}
 }
 ```
 
-MCP has no turn boundary, so the server sends `turn_ended` after a minute without calls. The runtime and its bindings stay until the client disconnects.
+MCP has no turn boundary, so the server sends `turn_ended` after one minute without calls while keeping the session alive until disconnect.
 
-## Behaviour
+## Architecture and paths
 
-Each session starts ChatGPT's signed Codex app-server with an isolated, credential-free home and asks it to run ChatGPT's own `cua_repl` server: OpenAI's signed `node_repl` with the settings ChatGPT wrote to `~/.codex/plugins/cache/openai-bundled/unified-computer-use/<ChatGPT version>/.mcp.json`. The adapter passes that server entry through unchanged, with three exceptions: a private working directory; the account's real `HOME`, which the runtime needs to find the shared Computer Use service; and starting `node_repl` directly rather than through ChatGPT's shell wrapper, so the runtime does not ask ChatGPT for a browser access grant. The app-server stays isolated. The Computer Use service accepts the runtime only when a signed OpenAI parent starts it, so the app-server cannot be skipped.
+Each session starts the signed runtime app-server with an isolated, credential-free home and launches `node_repl` with the settings from `~/.codex/plugins/cache/openai-bundled/unified-computer-use/<version>/.mcp.json`. The adapter isolates the app-server working directory and `CODEX_HOME`, passes the account's real `HOME` to `node_repl` so it can reach the background service, rejects any model-turn activity, verifies code signatures against Team ID `2DC432GLL2`, forwards elicitations, and cleans up its private process tree on teardown.
 
-Production calls require verified OpenAI-signed binaries with Team ID `2DC432GLL2`: the app-server, `node_repl`, the Node.js binary it names, and the Computer Use service. The adapter rejects any model-turn activity. It adds no permission prompts, app allowlist, action gate or content inspection. App-server uses Codex Full access. The adapter forwards any elicitation that the official host emits.
+Audit records store bounded metadata without code, arguments, app content, screenshots, prompts, or credentials.
 
-Closing a session ends its turn, then terminates its private processes. Cancellation and tool timeouts briefly wait for an outstanding native reply before ending the turn, so a late reply cannot recreate the cursor after cleanup. A stalled request, failed notification or lost transport can prevent native cleanup. The call still returns its result, because the action already ran, and private process teardown still runs. `brokerCleanupVerified` describes private process cleanup, not visual confirmation that a cursor disappeared.
+- Pi state directory: `~/.pi/agent/computer-use`
+- Standalone MCP and CLI state directory: `~/.pi-computer-use`
+- Audit log: `<stateDir>/audit/pi-computer-use.jsonl`
+- Override variable: `PI_COMPUTER_USE_HOME`
 
-Audit records contain bounded metadata. They exclude code, arguments, app content, screenshots, prompts and credentials. MCP and CLI state defaults to `~/.direct-computer-use`. Pi state defaults to `direct-computer-use` under the Pi agent directory. Set `CODEX_COMPUTER_USE_HOME` to override either default.
+Existing state in `direct-computer-use` or `.direct-computer-use` moves automatically on first use when the new directory does not yet exist.
 
-### Paths
+### Runtime discovery and overrides
 
-By default the adapter checks `/Applications/ChatGPT.app`, then `~/Applications/ChatGPT.app` in the OS account's home directory, then any other app Spotlight finds with ChatGPT's bundle ID `com.openai.codex` (for example an install still named `Codex.app` because the classic ChatGPT app occupies `ChatGPT.app`). In each bundle it looks for `Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`, then `Contents/Resources/codex` on older ChatGPT builds. It reads ChatGPT's `cua_repl` settings for that bundle's version from the plugin cache above. It does not use an arbitrary `codex` on `PATH` or the ambient `CODEX_CLI_PATH`.
+By default, the adapter checks `/Applications/ChatGPT.app`, `~/Applications/ChatGPT.app`, and any bundle Spotlight indexes under `com.openai.codex`. Inside the bundle it checks `Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex` and then `Contents/Resources/codex`. It never uses an arbitrary binary from `PATH` or `CODEX_CLI_PATH`.
 
-When ChatGPT is installed elsewhere, or keeps its settings elsewhere, set either path in `config.json` in the state directory:
+To override discovered paths, create `config.json` in the state directory:
 
 ```json
 {
-  "codexPath": "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
-  "cuaReplConfigPath": "/Users/me/.codex/plugins/cache/openai-bundled/unified-computer-use/26.1029.61003/.mcp.json"
+	"appServerPath": "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+	"cuaReplConfigPath": "/Users/me/.codex/plugins/cache/openai-bundled/unified-computer-use/26.1120.50957/.mcp.json"
 }
 ```
 
-The adapter reads this file when it starts each Computer Use session, so changes apply without restarting Pi or the MCP server. Tool descriptions are read when Pi loads the extension or the MCP server starts. Configured binaries must pass the same OpenAI signature and Team ID checks. Explicit overrides take precedence: a missing or invalid configured path never silently falls back to another installation. Version 0.6's `computerUseAppPath` setting is ignored; the runtime settings name the Computer Use app.
+Configured binaries must still pass signature and Team ID verification. Explicit overrides never fall back silently to another installation.
 
-If a component is missing, install or update the [official ChatGPT macOS app](https://chatgpt.com/download), open it, and install its Computer Use component. Installing this npm package alone does not install those signed components. The error lists the paths checked and the exact config file to edit. For Pi this is normally `~/.pi/agent/direct-computer-use/config.json`; for standalone MCP/CLI it is `~/.direct-computer-use/config.json`. `CODEX_COMPUTER_USE_HOME` overrides the state directory. `/computer-use-status` and `codex-computer-use-mcp --status` show the effective config path and the current error.
+### Targeting restricted apps
 
-### Operating ChatGPT itself
-
-By default the official service refuses to operate the ChatGPT app, with `Computer Use is not allowed to use the app 'com.openai.codex' for safety reasons.` As of ChatGPT for Work 26.1029.61003 with Computer Use 1001730, a global macOS preference lifts this:
+By default the background service blocks operating `com.openai.codex`. You can lift that restriction system-wide with:
 
 ```bash
 defaults write -g ComputerUseAllowForbiddenTargets -bool YES
 ```
 
-It applies to every Computer Use client on the Mac, including ChatGPT's own threads. The name suggests it also allows the service's other forbidden apps; only ChatGPT has been tested. To undo it, run `defaults delete -g ComputerUseAllowForbiddenTargets`.
+Run `defaults delete -g ComputerUseAllowForbiddenTargets` to restore the default.
 
-Select ChatGPT by full path, such as `/Applications/ChatGPT.app`, when another copy of the app shares its `com.openai.codex` bundle identifier. ChatGPT exposes its full interface to the accessibility tree, including the conversation list and composer, whether or not it is in front. In testing, the first reads returned only the window frame and menu bar; if that happens, read the state again.
+### Failures and recovery
 
-### Failures
-
-Errors name the cause and the next step, so an agent can recover or tell the user:
-
-| Cause | What the error says |
+| Cause | Reported message and recovery |
 | --- | --- |
-| The Computer Use service is stuck | Official `Sky Computer Use native pipe startup failed`, or a tool-call timeout, followed by `pkill -f MacOS/SkyComputerUseService`. The runtime relaunches the service on the next call. If it fails again, relaunch ChatGPT. |
-| ChatGPT stopped providing its unified runtime after the tools loaded, for example after an update | `ChatGPT <version> has not prepared its Computer Use runtime`: open ChatGPT, wait for it to start, and retry. If the runtime is still missing, `/reload` in Pi or restart the MCP server to switch to the older typed tools. |
-| ChatGPT is updating, or the Mac is busy | `codesign did not finish within 30 seconds`: wait and retry. |
-| A ChatGPT bundle is damaged or mid-update | `Signature verification failed for …`, with the reason from `codesign`. |
-| ChatGPT and this package no longer match | The app-server's own error, the last lines it printed before exiting, or an unexpected runtime settings shape, followed by both versions and a step to update ChatGPT and this package and restart the client. |
-| ChatGPT or its Computer Use component is not installed | The paths checked and how to install it. |
+| Background service is stuck | `Sky Computer Use native pipe startup failed` or a tool-call timeout. Run `pkill -f MacOS/SkyComputerUseService` so it relaunches on the next call. If it fails again, relaunch the ChatGPT desktop app. |
+| Unified runtime config is missing | `The runtime dependency (<version>) has not prepared its Computer Use runtime config`. Run `open -a ChatGPT`, wait for startup, and retry. If still missing, run `/reload` in Pi or restart the MCP server to use legacy tools. |
+| Signature check timed out | `codesign did not finish within 30 seconds`. Wait for updates or system load to settle and retry. |
+| Signature verification failed | `Signature verification failed for …` with the `codesign` reason. Wait for updates to finish or reinstall the ChatGPT desktop app. |
+| Package and runtime are out of step | App-server error or stderr tail with both versions. Run `open -a ChatGPT` to update the runtime, update `pi-computer-use`, and restart Pi or the MCP client. |
+| Runtime dependency is not installed | Lists checked paths and the exact `config.json` path to edit. |
 
 ## Development
 
@@ -160,4 +140,6 @@ npm run build
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
+
+This project began as a fork of `tmustier/codex-computer-use-mcp`.
