@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DirectBrokerCallError, type DirectBrokerResult } from "../src/direct-broker.ts";
-import { executeDirectTool, type DirectServiceDependencies } from "../src/direct-service.ts";
-import type { CuaReplArguments, CuaReplTool } from "../src/tools.ts";
+import { executeDirectTool, selectComputerUseRoute, type DirectServiceDependencies } from "../src/direct-service.ts";
+import { cuaReplToolDefinitions, type CuaReplArguments, type CuaReplTool } from "../src/tools.ts";
 
 function brokerResult(content = "ok", isError = false): DirectBrokerResult {
 	return {
@@ -161,6 +161,44 @@ test("transport failures and cancellation are audited without inventing broker e
 			assert.deepEqual(record.resultContentTypes, []);
 			assert.equal(record.resultBytes, 0);
 		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("cuaReplToolDefinitions and selectComputerUseRoute stay ready when overrides omit tools", async () => {
+	const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "direct-service-overrides-test.")));
+	try {
+		const codexPath = path.join(root, "codex");
+		await writeFile(codexPath, "", { mode: 0o755 });
+
+		for (const [name, env, expectedInstructions] of [
+			["server-instructions-only", { NODE_REPL_TOOL_OVERRIDES: JSON.stringify({ server_instructions: "Follow cua_repl guidance." }) }, "Follow cua_repl guidance."],
+			["no-tools-key", { NODE_REPL_TOOL_OVERRIDES: JSON.stringify({ unrelated: true }) }, undefined],
+			["empty-overrides-object", { NODE_REPL_TOOL_OVERRIDES: JSON.stringify({}) }, undefined],
+			["missing-overrides-env", {}, undefined],
+		] as const) {
+			const direct = cuaReplToolDefinitions(env);
+			assert.equal(direct.instructions, expectedInstructions, name);
+			assert.deepEqual(direct.tools.map((tool) => tool.name), ["js", "js_reset"], name);
+
+			const cuaReplConfigPath = path.join(root, `${name}.mcp.json`);
+			await writeFile(cuaReplConfigPath, JSON.stringify({
+				mcpServers: { cua_repl: { command: "/usr/bin/true", args: [], env } },
+			}));
+			await writeFile(path.join(root, "config.json"), JSON.stringify({ codexPath, cuaReplConfigPath }));
+
+			const route = selectComputerUseRoute(root);
+			assert.equal(route.kind, "cua_repl", name);
+			assert.equal(route.official.instructions, expectedInstructions, name);
+			assert.deepEqual(route.official.tools.map((tool) => tool.name), ["js", "js_reset"], name);
+			for (const tool of route.official.tools) {
+				assert.doesNotMatch(tool.description, /Computer Use is not ready:/, name);
+			}
+			assert.ok("timeout_ms" in route.official.tools[0]!.inputSchema.properties, name);
+		}
+
+		assert.throws(() => cuaReplToolDefinitions({ NODE_REPL_TOOL_OVERRIDES: JSON.stringify({ server_instructions: 123 }) }));
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

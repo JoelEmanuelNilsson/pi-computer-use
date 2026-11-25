@@ -41,16 +41,7 @@ export interface CuaReplToolSet {
 	tools: CuaReplToolDefinition[];
 }
 
-const overridesSchema = z.object({
-	server_instructions: z.string().optional(),
-	tools: z.object({
-		js: z.object({
-			description: z.string(),
-			field_descriptions: z.object({ code: z.string(), title: z.string() }),
-		}),
-		js_reset: z.object({ description: z.string() }),
-	}),
-});
+const overridesSchema = z.object({ server_instructions: z.string().optional() });
 const completionSchema = z.object({ instructions: z.string(), description: z.string() });
 
 const TIMEOUT_DESCRIPTION = "Optional timeout in milliseconds (default 30000).";
@@ -77,7 +68,7 @@ const ANNOTATIONS = { readOnlyHint: true, destructiveHint: false, openWorldHint:
  * cua_repl environment, without ChatGPT-app-only UI directives.
  */
 export function cuaReplToolDefinitions(env: Record<string, string>): CuaReplToolSet {
-	const overrides = overridesSchema.parse(JSON.parse(env.NODE_REPL_TOOL_OVERRIDES ?? "null"));
+	const overrides = env.NODE_REPL_TOOL_OVERRIDES ? overridesSchema.parse(JSON.parse(env.NODE_REPL_TOOL_OVERRIDES)) : undefined;
 	const completion = env.NODE_REPL_JS_COMPLETION_SUMMARY ? completionSchema.parse(JSON.parse(env.NODE_REPL_JS_COMPLETION_SUMMARY)) : undefined;
 	const properties: JsProperties = {
 		code: { description: CODE_DESCRIPTION, type: "string" },
@@ -92,7 +83,7 @@ export function cuaReplToolDefinitions(env: Record<string, string>): CuaReplTool
 	};
 	if (!completion) jsInputSchema.required = ["code"];
 	return {
-		instructions: overrides.server_instructions,
+		instructions: overrides?.server_instructions,
 		tools: [
 			{
 				name: "js",
