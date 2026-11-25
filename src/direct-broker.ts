@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
+import { ensureChromeNativeHostManifest } from "./chrome-native-host-manifest.ts";
 import type { CuaReplArguments, CuaReplTool, JsonObject, JsonValue } from "./tools.ts";
 import { PACKAGE_VERSION } from "./version.ts";
 
@@ -565,14 +566,36 @@ export interface OfficialCuaReplSession {
 	close(): Promise<void>;
 }
 
+export function buildCuaReplServerLaunchConfig(
+	server: CuaReplServer,
+	workDir: string,
+	userHome = os.userInfo().homedir,
+) {
+	const launch = [server.command, ...server.args];
+	const nodeRepl = launch.findIndex((part) => path.isAbsolute(part) && path.basename(part) === "node_repl");
+	assert(nodeRepl >= 0, "cua_repl config must name a node_repl executable");
+	return {
+		...server,
+		command: launch[nodeRepl]!,
+		args: launch.slice(nodeRepl + 1).filter((arg) => arg !== "--require-browser-access"),
+		env: { ...server.env, HOME: userHome },
+		cwd: workDir,
+		enabled: true,
+	};
+}
+
 export async function createOfficialCuaReplSession(
 	options: DirectBrokerOptions = {},
 ): Promise<OfficialCuaReplSession> {
 	const verification = options.skipSignatureVerification
-		? { brokerVersion: "test-app-server", clientBuild: "test-client", server: undefined, codexPath: undefined }
+		? { brokerVersion: "test-app-server", clientBuild: "test-client", server: undefined, codexPath: undefined, cuaReplConfigPath: undefined }
 		: (() => {
 			const verified = verifyOfficialDirectBroker({ configPath: options.configPath });
-			return { ...verified, server: verified.cuaRepl.server };
+			ensureChromeNativeHostManifest({
+				cuaReplConfigPath: verified.cuaRepl.configPath,
+				verifyBinary: (binaryPath) => verifySignedBinary(binaryPath, productionRunSync),
+			});
+			return { ...verified, server: verified.cuaRepl.server, cuaReplConfigPath: verified.cuaRepl.configPath };
 		})();
 	const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pi-direct-computer-use."));
 	const codexHome = path.join(tempRoot, "codex-home");
@@ -715,21 +738,7 @@ export async function createOfficialCuaReplSession(
 		let commandArgs = options.appServerArgs;
 		if (!commandArgs) {
 			assert(verification.server && verification.codexPath, "Test brokers must supply appServerArgs");
-			// ChatGPT launches node_repl through a shell that exports BROWSER_USE_ACCESS_EXECUTOR_ID,
-			// empty when ChatGPT supplies none. Any value makes the runtime ask ChatGPT's per-turn browser
-			// access grant host, which only ChatGPT runs. By the owner's choice, node_repl starts directly so
-			// browser surfaces work without that grant. The app-server runs with a private HOME; the
-			// runtime finds the shared Computer Use service socket under the account's real home.
-			const launch = [verification.server.command, ...verification.server.args];
-			const nodeRepl = launch.findIndex((part) => path.isAbsolute(part) && path.basename(part) === "node_repl");
-			const server = {
-				...verification.server,
-				command: launch[nodeRepl]!,
-				args: launch.slice(nodeRepl + 1),
-				env: { ...verification.server.env, HOME: os.userInfo().homedir },
-				cwd: workDir,
-				enabled: true,
-			};
+			const server = buildCuaReplServerLaunchConfig(verification.server, workDir);
 			const mcpTable = toToml({ [CUA_REPL_SERVER]: server });
 			const disabledProvider = '{ name = "Direct dispatch disabled provider", base_url = "http://127.0.0.1:9/v1", wire_api = "responses", request_max_retries = 0, stream_max_retries = 0, supports_websockets = false, requires_openai_auth = false }';
 			commandArgs = [
